@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "berzcoin"
+version = "0.1.0"
+description = "BerzCoin node and libraries"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.8.0",
+    "cryptography>=3.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "psutil>=5.8.0",
+]
+packaging = [
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+berzcoind = "node.app.main:main"
+berzcoin-cli = "cli.main:main"
+berzcoin-wallet = "cli.wallet_standalone:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["node*", "shared*", "cli*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = ["test_*.py", "*_test.py", "send_receive.py"]

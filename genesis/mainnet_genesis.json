@@ -1,0 +1,5 @@
+{
+  "_comment": "Placeholder. Mainnet consensus genesis lives in shared/consensus/params.py (ConsensusParams.mainnet). Use this file for operator-documented or future file-based genesis import.",
+  "network": "mainnet",
+  "refer_to_code": "shared.consensus.params.ConsensusParams.mainnet"
+}

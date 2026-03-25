@@ -1,0 +1,44 @@
+services:
+  berzcoin-node:
+    build:
+      context: ..
+      dockerfile: docker/node.Dockerfile
+    container_name: berzcoin-node
+    restart: unless-stopped
+    ports:
+      - "8333:8333"
+      - "8332:8332"
+    volumes:
+      - berzcoin-data:/var/lib/berzcoin
+    command: ["-datadir", "/var/lib/berzcoin"]
+
+  berzcoin-testnet:
+    build:
+      context: ..
+      dockerfile: docker/node.Dockerfile
+    container_name: berzcoin-testnet
+    restart: unless-stopped
+    ports:
+      - "18333:18333"
+      - "18332:18332"
+    volumes:
+      - berzcoin-testnet-data:/var/lib/berzcoin
+    command: ["--testnet", "-datadir", "/var/lib/berzcoin"]
+
+  berzcoin-regtest:
+    build:
+      context: ..
+      dockerfile: docker/node.Dockerfile
+    container_name: berzcoin-regtest
+    restart: unless-stopped
+    ports:
+      - "18444:18444"
+      - "18443:18443"
+    volumes:
+      - berzcoin-regtest-data:/var/lib/berzcoin
+    command: ["--regtest", "-datadir", "/var/lib/berzcoin"]
+
+volumes:
+  berzcoin-data:
+  berzcoin-testnet-data:
+  berzcoin-regtest-data:

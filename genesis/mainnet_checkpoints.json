@@ -1,0 +1,4 @@
+{
+  "checkpoints": [],
+  "_comment": "Add entries like {\"height\": 100000, \"block_hash\": \"hex...\", \"timestamp\": 123} when you publish mainnet checkpoints."
+}

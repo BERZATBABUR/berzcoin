@@ -1,0 +1,30 @@
+# Mainnet profile: DNS seeds + optional external checkpoint/genesis file paths.
+#
+# Note: berzcoind currently loads INI-style configs via ConfigParser (see
+# configs/secure_mainnet.toml). This TOML file is the canonical documented layout
+# for public mainnet; wire these keys into Config / loader, or translate to INI:
+#   dnsseeds = seed1.berzcoin.org,seed2.berzcoin.org,...
+#
+# Paths below are relative to the repository root unless you deploy them under datadir.
+
+[network]
+network = "mainnet"
+bind = "0.0.0.0"
+port = 8333
+
+[dns_seeds]
+# Replace with your production DNS seed hostnames (must resolve to P2P peers).
+seeds = [
+    "seed1.berzcoin.org",
+    "seed2.berzcoin.org",
+    "seed3.berzcoin.org",
+    "dnsseed.berzcoin.org",
+]
+
+[checkpoints]
+# Hardcoded checkpoints for fast sync (loaded when checkpoint pipeline supports this path).
+checkpoints_file = "genesis/mainnet_checkpoints.json"
+
+[genesis]
+# Optional exported mainnet genesis metadata (when genesis-from-file is implemented).
+genesis_file = "genesis/mainnet_genesis.json"

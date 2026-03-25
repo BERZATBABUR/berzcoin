@@ -1,0 +1,28 @@
+# Secure mainnet profile for BerzCoin (INI-style; load with: berzcoind -conf path/to/this/file)
+# Do not put rpcuser/rpcpassword or walletpassphrase here — use ~/.berzcoin/.cookie and runtime env/flags.
+
+[network]
+network = mainnet
+bind = 0.0.0.0
+port = 8333
+
+[rpc]
+rpcbind = 127.0.0.1
+rpcport = 8332
+rpcallowip = 127.0.0.1
+rpcthreads = 4
+rpcworkqueue = 16
+rpctimeout = 30
+
+[wallet]
+wallet = default
+disablewallet = false
+
+[mining]
+mining = false
+autominer = false
+
+[security]
+require_encrypted_wallet = true
+rpc_require_auth = true
+disable_ip_discovery = false

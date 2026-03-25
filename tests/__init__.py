@@ -1,0 +1,1 @@
+"""BerzCoin test suite."""
