@@ -4,13 +4,12 @@ import argparse
 import asyncio
 import signal
 import sys
-from typing import Any, Optional
+from typing import Any, Optional, Dict
 
 from shared.utils.logging import get_logger, setup_logging
 from node.chain.chainstate import ChainState
 from node.mempool.pool import Mempool
-from node.mining.block_assembler import BlockAssembler
-from node.mining.miner import CPUMiner
+from node.mining.miner import MiningNode
 from node.p2p.addrman import AddrMan
 from node.p2p.connman import ConnectionManager
 from node.p2p.dns_seeds import DNSSeeds
@@ -19,14 +18,14 @@ from node.rpc.handlers.control import ControlHandlers
 from node.rpc.handlers.mempool import MempoolHandlers
 from node.rpc.handlers.mining import MiningHandlers
 from node.rpc.handlers.mining_control import MiningControlHandlers
-from node.rpc.handlers.wallet import WalletHandlers
+
 from node.rpc.handlers.wallet_control import WalletControlHandlers
 from node.rpc.server import RPCServer
 from node.storage.blocks_store import BlocksStore
 from node.storage.db import Database
 from node.storage.migrations import Migrations, register_standard_migrations
 from node.storage.utxo_store import UTXOStore
-from node.wallet.core.wallet import Wallet
+from node.wallet.simple_wallet import SimpleWalletManager
 from .components import ComponentManager
 from .config import Config
 from .modes import ModeManager
@@ -37,61 +36,44 @@ logger = get_logger()
 class BerzCoinNode:
     """Main BerzCoin node."""
 
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: Optional[str] = None):
         self.config = Config(config_path)
         self.mode_manager = ModeManager(self.config)
         self.component_manager = ComponentManager()
 
         self.network: str = self.config.get("network", "mainnet")
-        self.db: Database = None  # type: ignore[assignment]
-        self.blocks_store: Optional[BlocksStore] = None  # type: ignore[assignment]
-        self.utxo_store: Optional[UTXOStore] = None  # type: ignore[assignment]
-        self.chainstate: ChainState = None  # type: ignore[assignment]
-        self.connman: ConnectionManager = None  # type: ignore[assignment]
-        self.mempool: Mempool = None  # type: ignore[assignment]
-        self.wallet: Wallet = None  # type: ignore[assignment]
-        self.miner: CPUMiner = None  # type: ignore[assignment]
-        self.rpc_server: RPCServer = None  # type: ignore[assignment]
-        self.dashboard: Any = None  # type: ignore[assignment]  # node.web.dashboard.WebDashboard
+        self.db: Optional[Database] = None
+        self.blocks_store: Optional[BlocksStore] = None
+        self.utxo_store: Optional[UTXOStore] = None
+        self.chainstate: Optional[ChainState] = None
+        self.connman: Optional[ConnectionManager] = None
+        self.mempool: Optional[Mempool] = None
+        self.wallet_manager: Optional[SimpleWalletManager] = None
+        self.miner: Optional[MiningNode] = None
+        self.rpc_server: Optional[RPCServer] = None
+        self.dashboard: Any = None
 
         self.running = False
         self.sync_task: Optional[asyncio.Task] = None
 
     async def initialize(self) -> bool:
-        """Initialize node subsystems (database, chain, optional reindex, mempool, …)."""
+        """Initialize node subsystems."""
         logger.info("Initializing BerzCoin node...")
-        self.mode_manager = ModeManager(self.config)
-        self.network = self.config.get("network", "mainnet")
 
         if not self.config.validate():
             return False
 
-        reindex = bool(self.config.get("reindex", False))
-
         setup_logging(
-            level="DEBUG" if self.config.get("debug") else "INFO",
-            log_file=str(self.config.get_datadir() / self.config.get("logfile")),
-            debug=bool(self.config.get("debug")),
+            level=("DEBUG" if self.config.get("debug") else "INFO"),
+            log_file=str(
+                self.config.get_datadir() / self.config.get("logfile")
+            ),
         )
 
         if not await self._init_database():
             return False
         if not await self._init_chainstate():
             return False
-
-        if reindex:
-            logger.info("Reindexing blockchain...")
-            from .reindex import Reindexer
-
-            reindexer = Reindexer(
-                self.chainstate,
-                self.chainstate.blocks_store,
-                self.chainstate.utxo_store,
-            )
-            if not await reindexer.run():
-                logger.error("Reindex failed")
-                return False
-
         if not await self._init_mempool():
             return False
         if not await self._init_p2p():
@@ -107,9 +89,11 @@ class BerzCoinNode:
         return True
 
     async def start(self) -> None:
-        """Start node services and block sync loop."""
+        """Start node services."""
         logger.info("Starting BerzCoin node...")
         self.running = True
+        # Ensure expected subsystems are initialized for type checkers
+        assert self.chainstate is not None
 
         if self.connman:
             await self.connman.start()
@@ -117,37 +101,34 @@ class BerzCoinNode:
         if self.rpc_server:
             await self.rpc_server.start()
 
-        # Important: start RPC before blocking bootstrap so operators/CLIs can call into the node.
-        if self.connman and self.chainstate.get_best_height() == -1:
-            logger.info(
-                "Chain has no blocks; running initial bootstrap (timeout 300s)"
-            )
-            from node.app.bootstrap import Bootstrap
+        # Bootstrap if chain is empty
+        if self.chainstate.get_best_height() == -1:
+            logger.info("Chain empty, running bootstrap...")
+            from node.app.bootstrap import NodeBootstrap
 
-            bootstrap = Bootstrap(self.chainstate, self.connman)
+            bootstrap = NodeBootstrap(
+                self.chainstate,
+                self.connman,
+                self.utxo_store,
+            )
             try:
-                await asyncio.wait_for(bootstrap.run(), timeout=300)
+                coro = bootstrap.sync_full_chain()
+                await asyncio.wait_for(coro, timeout=300)
             except asyncio.TimeoutError:
-                logger.warning("Bootstrap timed out; continuing with background sync")
+                logger.warning("Bootstrap timeout")
 
         if self.connman:
             self.sync_task = asyncio.create_task(self._run_sync_loop())
 
-        if self.miner:
-            autostart = bool(self.config.get("mining")) or (
-                self.config.get("network") == "regtest"
-                and bool(self.config.get("autominer", False))
-            )
-            if autostart:
-                await self.miner.start_mining(self.config.get("miningaddress"))
+        # Auto-start mining if configured
+        if self.miner and self.config.get("autominer"):
+            await self.miner.start_mining(self.config.get("miningaddress"))
 
         logger.info("Node started")
         await self._wait_for_shutdown()
 
     async def stop(self) -> None:
         """Stop node services."""
-        if not self.running and not self.rpc_server:
-            return
         logger.info("Stopping BerzCoin node...")
         self.running = False
 
@@ -157,17 +138,19 @@ class BerzCoinNode:
                 await self.sync_task
             except asyncio.CancelledError:
                 pass
-            self.sync_task = None
 
         if self.miner:
             await self.miner.stop_mining()
+
         if self.rpc_server:
             await self.rpc_server.stop()
+
         if self.dashboard:
             await self.dashboard.stop()
-            self.dashboard = None
+
         if self.connman:
             await self.connman.stop()
+
         if self.db:
             self.db.disconnect()
 
@@ -175,6 +158,7 @@ class BerzCoinNode:
 
     async def _run_sync_loop(self) -> None:
         """Run block synchronization loop."""
+        assert self.chainstate is not None
         logger.info("Starting block sync loop")
 
         while self.running:
@@ -183,20 +167,18 @@ class BerzCoinNode:
                     best_peer = self.connman.get_best_height_peer()
 
                     if best_peer:
-                        current_height = self.chainstate.get_best_height()
+                        cur = self.chainstate.get_best_height()
                         peer_height = best_peer.peer_height
 
-                        if peer_height > current_height:
-                            logger.info(f"Syncing: {current_height} / {peer_height}")
+                        if peer_height > cur:
+                            logger.info(
+                                "Syncing: %d / %d",
+                                cur, peer_height,
+                            )
 
                             from node.p2p.sync import BlockSync
-
                             sync = BlockSync(self.chainstate)
                             await sync.sync_from_peer(best_peer)
-
-                            await self._download_missing_blocks(
-                                best_peer, current_height, peer_height
-                            )
 
                 await asyncio.sleep(30)
 
@@ -206,19 +188,8 @@ class BerzCoinNode:
                 logger.error(f"Sync loop error: {e}")
                 await asyncio.sleep(60)
 
-    async def _download_missing_blocks(self, peer, start_height: int, end_height: int) -> None:
-        """Download missing blocks from peer for heights (start_height, end_height]."""
-        from shared.protocol.messages import InvMessage
-
-        for height in range(start_height + 1, end_height + 1):
-            hdr = self.chainstate.header_chain.get_header(height)
-            if hdr:
-                await peer.send_getdata(InvMessage.InvType.MSG_BLOCK, hdr.hash())
-                logger.debug(f"Requested block {height}")
-
-            await asyncio.sleep(0.1)
-
     async def _init_database(self) -> bool:
+        """Initialize database."""
         datadir = self.config.get_datadir()
         network = self.config.get("network")
         self.db = Database(datadir, network)
@@ -230,8 +201,10 @@ class BerzCoinNode:
         return True
 
     async def _init_chainstate(self) -> bool:
-        """Initialize chainstate and shared block/UTXO stores."""
+        """Initialize chainstate."""
         data_dir = str(self.config.get_datadir())
+        # ensure database initialized for type checkers
+        assert self.db is not None
         self.blocks_store = BlocksStore(self.db, data_dir)
         self.utxo_store = UTXOStore(self.db)
         self.chainstate = ChainState(
@@ -242,24 +215,30 @@ class BerzCoinNode:
             utxo_store=self.utxo_store,
         )
         self.chainstate.initialize()
+        # Expose configured network name on chainstate for compatibility
+        # with components (miner, tx builder) that expect `chainstate.network`.
+        try:
+            setattr(self.chainstate, "network", self.config.get("network"))
+        except Exception:
+            pass
         return True
 
     async def _init_mempool(self) -> bool:
         """Initialize mempool."""
         if self.mode_manager.is_light_node():
-            self.mempool = None  # type: ignore[assignment]
+            self.mempool = None
             return True
-
+        # Ensure chainstate available for mempool
+        assert self.chainstate is not None
         self.mempool = Mempool(self.chainstate)
-        # Connection manager for inv broadcast; updated in _init_p2p when connman exists
-        self.mempool.connman = self.connman
-
         return True
 
     async def _init_p2p(self) -> bool:
         """Initialize P2P network."""
-        if self.mode_manager.is_light_node() and not self.mode_manager.is_full_node():
-            self.connman = None  # type: ignore[assignment]
+        is_light = self.mode_manager.is_light_node()
+        is_full = self.mode_manager.is_full_node()
+        if is_light and not is_full:
+            self.connman = None
             return True
 
         addrman = AddrMan()
@@ -267,6 +246,7 @@ class BerzCoinNode:
         dns_seeds = None
         if not connect_only and self.config.get("dnsseed"):
             dns_seeds = DNSSeeds(self.config.get("dnsseeds"))
+
         self.connman = ConnectionManager(
             addrman=addrman,
             max_connections=self.config.get("maxconnections"),
@@ -276,74 +256,55 @@ class BerzCoinNode:
             connect_only=connect_only,
         )
 
-        if hasattr(self, "mempool") and self.mempool:
-            self.mempool.connman = self.connman
-
         return True
 
     async def _init_wallet(self) -> bool:
-        if not self.mode_manager.has_wallet():
-            self.wallet = None  # type: ignore[assignment]
-            return True
+        """Initialize simple wallet manager (private key based)."""
+        datadir = self.config.get_datadir()
+        self.wallet_manager = SimpleWalletManager(datadir)
 
-        wallet_path = self.config.get_datadir() / "wallets" / self.config.get("wallet")
-        wallet_path.parent.mkdir(parents=True, exist_ok=True)
-        self.wallet = Wallet(str(wallet_path), self.config.get("network"))
-
-        passphrase = (self.config.get("walletpassphrase") or "").strip()
-        if wallet_path.exists():
-            if not passphrase:
-                logger.error("walletpassphrase is required to load an existing wallet")
-                return False
-            try:
-                if not self.wallet.load(passphrase):
-                    logger.warning("Failed to load wallet")
-                    return False
-            except ValueError as e:
-                logger.error("%s", e)
-                return False
-        else:
-            if not passphrase:
-                logger.error("walletpassphrase is required to create a new encrypted wallet")
-                return False
-            try:
-                mnemonic = self.wallet.create(passphrase)
-                logger.info("Created new wallet (mnemonic length %s chars)", len(mnemonic))
-            except ValueError as e:
-                logger.error("%s", e)
-                return False
+        # Check if wallet already exists
+        if self.config.get("wallet_private_key"):
+            pk = self.config.get("wallet_private_key")
+            self.wallet_manager.activate_wallet(pk)
+            logger.info("Wallet activated with provided key")
 
         return True
 
     async def _init_mining(self) -> bool:
-        """Initialize CPU miner when ``mining`` mode is on, or on regtest (for RPC/dashboard without forcing mine on boot)."""
-        use_miner = self.mode_manager.is_mining() or self.config.get("network") == "regtest"
+        """Initialize mining node."""
+        is_regtest = self.config.get("network") == "regtest"
+        use_miner = self.mode_manager.is_mining() or is_regtest
         if not use_miner:
-            self.miner = None  # type: ignore[assignment]
+            self.miner = None
             return True
 
-        block_assembler = BlockAssembler(
+        mining_address = self.config.get("miningaddress")
+
+        # If mining address not set, try to use active wallet
+        wm = self.wallet_manager
+        if not mining_address and wm and wm.get_active_wallet():
+            mining_address = wm.get_active_address()
+            if mining_address:
+                self.config.set("miningaddress", mining_address)
+
+        # Ensure required subsystems
+        assert self.chainstate is not None
+        if self.mempool is None:
+            # try to initialize a simple mempool if missing
+            self.mempool = Mempool(self.chainstate)
+
+        self.miner = MiningNode(
             self.chainstate,
             self.mempool,
-            self.config.get("miningaddress"),
-            network=self.config.get("network"),
+            mining_address or "",
+            p2p_manager=self.connman,
         )
-        self.miner = CPUMiner(
-            self.chainstate,
-            block_assembler,
-            self.config.get("miningaddress"),
-        )
-
-        if self.config.get("network") == "regtest" and self.config.get("autominer", False):
-            asyncio.create_task(
-                self.miner.start_mining(self.config.get("miningaddress"), threads=1)
-            )
-            logger.info("Auto-mining enabled on regtest")
 
         return True
 
     async def _init_rpc(self) -> bool:
-        """Initialize JSON-RPC server with secure binding (rpcbind + rpcallowip via get_rpc_bind)."""
+        """Initialize RPC server."""
         rpc_host = self.config.get_rpc_bind()
         rpc_port = int(self.config.get("rpcport", 8332))
 
@@ -354,92 +315,232 @@ class BerzCoinNode:
             config=self.config,
         )
 
+        # Register handlers
         control = ControlHandlers(self)
         blockchain = BlockchainHandlers(self)
         mempool = MempoolHandlers(self)
-        wallet = WalletHandlers(self)
         mining = MiningHandlers(self)
         mining_control = MiningControlHandlers(self)
-        wallet_control = WalletControlHandlers(self)
+        w_ctrl = WalletControlHandlers(self)  # noqa: F841
 
-        self.rpc_server.register_handlers(
-            {
-                "get_info": control.get_info,
-                "stop": control.stop,
-                "help": control.help,
-                "get_blockchain_info": blockchain.get_blockchain_info,
-                "get_block": blockchain.get_block,
-                "get_block_count": blockchain.get_block_count,
-                "get_best_block_hash": blockchain.get_best_block_hash,
-                "get_mempool_info": mempool.get_mempool_info,
-                "get_raw_mempool": mempool.get_raw_mempool,
-                "get_mempool_entry": mempool.get_mempool_entry,
-                "send_raw_transaction": mempool.send_raw_transaction,
-                "test_mempool_accept": mempool.test_mempool_accept,
-                "get_wallet_info": wallet.get_wallet_info,
-                "get_balance": wallet.get_balance,
-                "get_new_address": wallet.get_new_address,
-                "send_to_address": wallet.send_to_address,
-                "get_mining_info": mining.get_mining_info,
-                "get_block_template": mining.get_block_template,
-                "submit_block": mining.submit_block,
-                "generate": mining.generate,
-                "setgenerate": mining_control.set_generate,
-                "getminingstatus": mining_control.get_mining_status,
-                "setminingaddress": mining_control.set_mining_address,
-                "getminingtemplates": mining_control.get_mining_templates,
-                "getminingworkers": mining_control.get_mining_workers,
-                "setminingdifficulty": mining_control.set_mining_difficulty,
-                "listwallets": wallet_control.list_wallets,
-                "loadwallet": wallet_control.load_wallet,
-                "createwallet": wallet_control.create_wallet,
-                "unloadwallet": wallet_control.unload_wallet,
-                "backupwallet": wallet_control.backup_wallet,
-                "restorewallet": wallet_control.restore_wallet,
-                "listbackups": wallet_control.list_backups,
-                "getwalletaddresses": wallet_control.get_wallet_addresses,
-                "getwalletutxos": wallet_control.get_wallet_utxos,
-                "getwallettransactions": wallet_control.get_wallet_transactions,
-                "setwalletlabel": wallet_control.set_wallet_label,
-                "lockwallet": wallet_control.lock_wallet,
-                "unlockwallet": wallet_control.unlock_wallet,
-                "getwalletaccounts": wallet_control.get_wallet_accounts,
-                "createaccount": wallet_control.create_account,
-                "getwalletsummary": wallet_control.get_wallet_summary,
-            }
-        )
+        self.rpc_server.register_handlers({
+            # Control
+            "get_info": control.get_info,
+            "stop": control.stop,
+            "help": control.help,
+            "get_network_info": control.get_network_info,
+            "ping": control.ping,
+            "uptime": control.uptime,
 
+            # Blockchain
+            "get_blockchain_info": blockchain.get_blockchain_info,
+            "get_block": blockchain.get_block,
+            "get_block_count": blockchain.get_block_count,
+            "get_best_block_hash": blockchain.get_best_block_hash,
+
+            # Mempool
+            "get_mempool_info": mempool.get_mempool_info,
+            "get_raw_mempool": mempool.get_raw_mempool,
+            "send_raw_transaction": mempool.send_raw_transaction,
+
+            # Wallet (private key based)
+            "create_wallet": self._rpc_create_wallet,
+            "activate_wallet": self._rpc_activate_wallet,
+            "deactivate_wallet": self._rpc_deactivate_wallet,
+            "get_wallet_info": self._rpc_get_wallet_info,
+            "get_wallet_balance": self._rpc_get_wallet_balance,
+            "get_wallet_address": self._rpc_get_wallet_address,
+            "send_to_address": self._rpc_send_to_address,
+
+            # Mining
+            "get_mining_info": mining.get_mining_info,
+            "get_block_template": mining.get_block_template,
+            "submit_block": mining.submit_block,
+            "generate": mining.generate,
+            "setgenerate": mining_control.set_generate,
+            "getminingstatus": mining_control.get_mining_status,
+            "setminingaddress": mining_control.set_mining_address,
+        })
+
+        # Web dashboard
         if self.config.get("webdashboard", False):
-            # Prefer the enhanced dashboard UI.
-            from node.web.enhanced_dashboard import EnhancedDashboard
-
-            self.dashboard = EnhancedDashboard(
+            from node.web.mining_wallet_dashboard import MiningWalletDashboard
+            self.dashboard = MiningWalletDashboard(
                 self,
                 str(self.config.get("webhost", "127.0.0.1")),
                 int(self.config.get("webport", 8080)),
-                require_auth=bool(self.config.get("web_require_auth", False)),
             )
             await self.dashboard.start()
+            host = self.config.get('webhost')
+            port = self.config.get('webport')
             logger.info(
                 "Web dashboard on http://%s:%s",
-                self.config.get("webhost", "127.0.0.1"),
-                self.config.get("webport", 8080),
+                host, port,
             )
 
         return True
 
+    # RPC methods for simple wallet
+
+    async def _rpc_create_wallet(self) -> Dict[str, Any]:
+        """Create a new wallet (returns private key)."""
+        assert self.wallet_manager is not None
+        wallet = self.wallet_manager.create_wallet()
+        return {
+            "private_key": wallet.private_key_hex,
+            "public_key": wallet.public_key_hex,
+            "address": wallet.address,
+            "mnemonic": wallet.mnemonic,
+            "warning": "⚠️ SAVE YOUR PRIVATE KEY! You are responsible for it."
+        }
+
+    async def _rpc_activate_wallet(self, private_key: str) -> Dict[str, Any]:
+        """Activate wallet with private key."""
+        assert self.wallet_manager is not None
+        wallet = self.wallet_manager.activate_wallet(private_key)
+        if not wallet:
+            return {"error": "Invalid private key"}
+
+        assert self.chainstate is not None
+        bal = self.wallet_manager.get_balance(
+            self.chainstate,
+        )
+        return {
+            "address": wallet.address,
+            "public_key": wallet.public_key_hex,
+            "balance": bal / 100_000_000,
+        }
+
+    async def _rpc_deactivate_wallet(self) -> Dict[str, Any]:
+        """Deactivate current wallet."""
+        assert self.wallet_manager is not None
+        self.wallet_manager.deactivate_wallet()
+        return {"status": "deactivated"}
+
+    async def _rpc_get_wallet_info(self) -> Dict[str, Any]:
+        """Get current wallet info."""
+        assert self.wallet_manager is not None
+        wallet = self.wallet_manager.get_active_wallet()
+        if not wallet:
+            return {"active": False}
+
+        assert self.chainstate is not None
+        return {
+            "active": True,
+            "address": wallet.address,
+            "public_key": wallet.public_key_hex,
+            "private_key": self.wallet_manager.get_active_private_key(),
+            "mnemonic": wallet.mnemonic,
+            "balance": self.wallet_manager.get_balance(
+                self.chainstate,
+            ) / 100_000_000,
+        }
+
+    async def _rpc_get_wallet_balance(self) -> Dict[str, Any]:
+        """Get wallet balance."""
+        assert self.wallet_manager is not None
+        assert self.chainstate is not None
+        balance = self.wallet_manager.get_balance(self.chainstate)
+        return {"balance": balance / 100000000, "satoshis": balance}
+
+    async def _rpc_get_wallet_address(self) -> Dict[str, Any]:
+        """Get active wallet address."""
+        assert self.wallet_manager is not None
+        wallet = self.wallet_manager.get_active_wallet()
+        if not wallet:
+            return {"error": "No active wallet"}
+
+        return {"address": wallet.address}
+
+    async def _rpc_send_to_address(
+        self,
+        to_address: str,
+        amount: float,
+        private_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Send coins to address."""
+        assert self.wallet_manager is not None
+        assert self.chainstate is not None
+        assert self.mempool is not None
+        satoshis = int(amount * 100000000)
+
+        # Use provided private key or active wallet
+        if private_key:
+            wallet = self.wallet_manager.activate_wallet(private_key)
+            if not wallet:
+                return {"error": "Invalid private key"}
+        elif not self.wallet_manager.get_active_wallet():
+            return {"error": "No active wallet. Provide private key."}
+
+        address = self.wallet_manager.get_active_address()
+        if not address:
+            return {"error": "No active address"}
+
+        # Get UTXOs
+        utxos = self.chainstate.get_utxos_for_address(address, 1000)
+        if not utxos:
+            return {"error": "No UTXOs found"}
+
+        # Select UTXOs
+        selected = []
+        selected_amount = 0
+        for utxo in utxos:
+            selected.append(utxo)
+            selected_amount += utxo.get('value', 0)
+            if selected_amount >= satoshis:
+                break
+
+        if selected_amount < satoshis:
+            return {"error": "Insufficient funds"}
+
+        # Build transaction
+        from node.wallet.core.tx_builder import TransactionBuilder
+        builder = TransactionBuilder(self.config.get("network"))
+
+        inputs = [(u['txid'], u['vout'], u['value']) for u in selected]
+        outputs = [(to_address, satoshis)]
+        change_address = address
+
+        tx = builder.create_transaction(inputs, outputs, change_address)
+
+        # Sign transaction
+        from shared.crypto.keys import PrivateKey
+        from shared.crypto.signatures import sign_message_hash
+
+        pk_hex = self.wallet_manager.get_active_private_key()
+        if not pk_hex:
+            return {"error": "No active private key"}
+        private_key_obj = PrivateKey(int(pk_hex, 16))
+
+        for i, txin in enumerate(tx.vin):
+            sighash = tx.txid()
+            signature = sign_message_hash(private_key_obj, sighash)
+            txin.script_sig = signature + bytes([0x01])
+
+        # Broadcast
+        if await self.mempool.add_transaction(tx):
+            return {
+                "txid": tx.txid().hex(),
+                "from": address,
+                "to": to_address,
+                "amount": amount
+            }
+
+        return {"error": "Transaction rejected"}
+
     async def _wait_for_shutdown(self) -> None:
+        """Wait for shutdown signal."""
         loop = asyncio.get_running_loop()
         stop_event = asyncio.Event()
 
-        def request_stop() -> None:
+        def request_stop():
             stop_event.set()
 
         try:
             for sig in (signal.SIGINT, signal.SIGTERM):
                 loop.add_signal_handler(sig, request_stop)
         except NotImplementedError:
-            logger.warning("Signal handlers not available; use Ctrl+C may not stop cleanly")
+            pass
 
         await stop_event.wait()
         await self.stop()
@@ -449,43 +550,25 @@ async def _amain() -> None:
     parser = argparse.ArgumentParser(description="BerzCoin Node")
     parser.add_argument("-conf", help="Configuration file")
     parser.add_argument("-datadir", help="Data directory")
-    parser.add_argument("-reindex", action="store_true", help="Reindex blockchain")
+    parser.add_argument("--testnet", action="store_true", help="Use testnet")
+    parser.add_argument("--regtest", action="store_true", help="Use regtest")
     parser.add_argument(
-        "--testnet",
-        action="store_true",
-        help="Use testnet parameters (overrides config network)",
+        "--wallet-private-key",
+        help="Activate wallet with private key",
     )
-    parser.add_argument(
-        "--regtest",
-        action="store_true",
-        help="Use regtest parameters (overrides config network)",
-    )
-    parser.add_argument(
-        "--disablewallet",
-        action="store_true",
-        help="Disable wallet / skip wallet initialization (chain-only node)",
-    )
-    parser.add_argument(
-        "--walletpassphrase",
-        default=None,
-        help="Wallet encryption passphrase (overrides config; avoid on shared systems — visible in process list)",
-    )
+
     args = parser.parse_args()
 
     node = BerzCoinNode(args.conf)
+
     if args.datadir:
         node.config.set("datadir", args.datadir)
     if args.regtest:
         node.config.set("network", "regtest")
     elif args.testnet:
         node.config.set("network", "testnet")
-
-    if args.reindex:
-        node.config.set("reindex", True)
-    if args.disablewallet:
-        node.config.set("disablewallet", True)
-    if args.walletpassphrase is not None:
-        node.config.set("walletpassphrase", args.walletpassphrase)
+    if args.wallet_private_key:
+        node.config.set("wallet_private_key", args.wallet_private_key)
 
     if not await node.initialize():
         sys.exit(1)

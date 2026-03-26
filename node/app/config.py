@@ -52,11 +52,8 @@ class Config:
         "lightwallet": False,
         "filterport": 8334,
         "checkpoints": True,
-        "dnsseed": True,
-        "dnsseeds": [
-            "seed.berzcoin.sipa.be",
-            "dnsseed.berzcoin.dashjr.org",
-        ],
+        "dnsseed": False,
+        "dnsseeds": [],
         "addnode": [],
         "connect": [],
         "bootstrap_file": "bootstrap_nodes.json",
@@ -68,6 +65,9 @@ class Config:
         "require_encrypted_wallet": True,
         "rpc_require_auth": True,
         "disable_ip_discovery": False,
+        # Operator safety: refuse to start a public-facing node when no
+        # bootstrap peers are configured unless this flag is set to true.
+        "allow_missing_bootstrap": False,
     }
 
     def __init__(self, config_path: Optional[str] = None):

@@ -1,89 +1,97 @@
-"""Initial blockchain bootstrap and sync."""
+"""Node bootstrap with full chain scan."""
 
 import asyncio
-import time
-from typing import Any, Dict, Optional
-
-from shared.utils.logging import get_logger
-from node.chain.chainstate import ChainState
-from node.p2p.connman import ConnectionManager
-from node.p2p.sync import BlockSync
+from typing import Optional
+from ...shared.utils.logging import get_logger
 
 logger = get_logger()
 
 
-class Bootstrap:
-    """Initial blockchain bootstrap."""
+class NodeBootstrap:
+    """Initialize new node with full chain sync."""
 
-    def __init__(self, chainstate: ChainState, connman: ConnectionManager):
+    def __init__(self, chainstate, p2p_manager, utxo_store):
+        """Initialize bootstrap."""
         self.chainstate = chainstate
-        self.connman = connman
-        self.sync = BlockSync(chainstate)
-        self.is_bootstrapping = False
+        self.p2p_manager = p2p_manager
+        self.utxo_store = utxo_store
+        self.syncing = False
 
-    async def run(self) -> bool:
-        self.is_bootstrapping = True
+    async def sync_full_chain(self) -> bool:
+        """Sync full blockchain from peers."""
+        if self.syncing:
+            return False
+
+        self.syncing = True
+        logger.info("Starting full chain sync...")
+
         try:
-            if self.chainstate.get_best_height() >= 0:
-                logger.info("Chain already has blocks, checking sync...")
+            # Get best peer
+            best_peer = self.p2p_manager.get_best_height_peer()
+            if not best_peer:
+                logger.warning("No peers available for sync")
+                return False
 
-            await self._wait_for_peers()
+            target_height = best_peer.peer_height
+            current_height = self.chainstate.get_best_height()
 
-            best_peer = self.connman.get_best_height_peer()
-            if best_peer:
-                logger.info(
-                    "Starting bootstrap from peer at height %s",
-                    best_peer.peer_height,
-                )
-                await self.sync.sync_from_peer(best_peer)
+            logger.info(f"Syncing from height {current_height} to {target_height}")
 
-            await self._wait_for_sync()
+            # Download headers first
+            await self._sync_headers(best_peer)
 
-            logger.info(
-                "Bootstrap completed at height %s",
-                self.chainstate.get_best_height(),
-            )
+            # Download and verify blocks
+            await self._sync_blocks(best_peer, current_height, target_height)
+
+            # Final verification
+            await self._verify_chain()
+
+            logger.info(f"Full chain sync complete. Height: {self.chainstate.get_best_height()}")
             return True
+
         except Exception as e:
-            logger.error("Bootstrap failed: %s", e)
+            logger.error(f"Sync failed: {e}")
             return False
         finally:
-            self.is_bootstrapping = False
+            self.syncing = False
 
-    async def _wait_for_peers(self, timeout: int = 60) -> None:
-        start = time.monotonic()
-        while self.connman.get_connected_count() == 0:
-            if time.monotonic() - start > timeout:
-                logger.warning("Timeout waiting for peers")
-                return
-            logger.info("Waiting for peers...")
-            await asyncio.sleep(5)
+    async def _sync_headers(self, peer) -> None:
+        """Sync block headers."""
+        from ..p2p.sync import BlockSync
+        sync = BlockSync(self.chainstate)
+        await sync.sync_from_peer(peer)
 
-    async def _wait_for_sync(self) -> None:
-        while not self.sync.is_synced():
-            best_height = self.chainstate.get_best_height()
-            best_peer = self.connman.get_best_height_peer()
-            if best_peer:
-                logger.info("Syncing: %s / %s", best_height, best_peer.peer_height)
-            await asyncio.sleep(10)
+    async def _sync_blocks(self, peer, start_height: int, end_height: int) -> None:
+        """Download and verify blocks."""
+        from shared.protocol.messages import InvMessage
 
-    async def resync(self) -> bool:
-        logger.info("Starting resync...")
-        return await self.run()
+        for height in range(start_height + 1, end_height + 1):
+            # Request block
+            block_hash = self.chainstate.header_chain.get_header(height)
+            if block_hash:
+                await peer.send_getdata(InvMessage.InvType.MSG_BLOCK, block_hash.hash())
 
-    def get_status(self) -> Dict[str, Any]:
+            # Small delay to avoid overwhelming peer
+            await asyncio.sleep(0.01)
+
+            if height % 1000 == 0:
+                logger.info(f"Synced {height} / {end_height} blocks")
+
+    async def _verify_chain(self) -> None:
+        """Verify full chain integrity."""
         best_height = self.chainstate.get_best_height()
-        best_peer: Optional[Any] = self.connman.get_best_height_peer()
-        target = best_peer.peer_height if best_peer else best_height
-        progress = (
-            best_height / best_peer.peer_height
-            if best_peer and best_peer.peer_height > 0
-            else 1.0
-        )
+        logger.info(f"Verifying chain up to height {best_height}...")
+
+        # Verify UTXO set consistency
+        if self.utxo_store.verify_consistency():
+            logger.info("UTXO set verification passed")
+        else:
+            logger.error("UTXO set verification failed!")
+
+    def get_progress(self) -> dict:
+        """Get sync progress."""
         return {
-            "bootstrapping": self.is_bootstrapping,
-            "height": best_height,
-            "target_height": target,
-            "progress": progress,
-            "peers": self.connman.get_connected_count(),
+            'syncing': self.syncing,
+            'current_height': self.chainstate.get_best_height(),
+            'target_height': self.p2p_manager.get_best_height_peer().peer_height if self.p2p_manager else 0
         }

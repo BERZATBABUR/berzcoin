@@ -51,29 +51,39 @@ class Mempool:
         self.total_size = 0
         self.total_weight = 0
         self.total_fee = 0
+        # Last rejection reason for the most recent failed add_transaction attempt
+        self.last_reject_reason: Optional[str] = None
 
     async def add_transaction(self, tx: Transaction, source_peer: Optional[str] = None) -> bool:
         async with self._lock:
             txid = tx.txid().hex()
             if txid in self.transactions:
                 logger.debug(f"Transaction {txid[:16]} already in mempool")
+                self.last_reject_reason = "already_in_mempool"
                 return False
             if not await self._validate_transaction(tx):
+                # _validate_transaction logs specifics; set a generic reason
+                self.last_reject_reason = "validation_failed"
                 return False
             if not self.policy.is_standard(tx):
                 logger.debug(f"Transaction {txid[:16]} not standard")
+                self.last_reject_reason = "non_standard"
                 return False
             fee = await self._calculate_fee(tx)
             if fee < self.policy.min_relay_fee * tx.size():
                 logger.debug(f"Transaction {txid[:16]} fee too low")
+                self.last_reject_reason = "fee_too_low"
                 return False
             parents = await self._check_dependencies(tx)
             if parents is None:
+                logger.debug(f"Transaction {txid[:16]} has missing parents")
+                self.last_reject_reason = "missing_parents"
                 return False
             size = len(tx.serialize())
             weight = calculate_transaction_weight(tx)
             if not self.limits.can_accept(size, weight, len(self.transactions)):
                 logger.debug("Mempool limits reached")
+                self.last_reject_reason = "mempool_limits"
                 return False
             entry = MempoolEntry(
                 tx=tx,
@@ -92,6 +102,11 @@ class Mempool:
             self.total_weight += weight
             self.total_fee += fee
             self._update_indexes(txid, entry)
+            # Record fee for estimation/history
+            try:
+                self.fee_calculator.add_transaction(entry.fee, entry.size, entry.height_added)
+            except Exception:
+                logger.debug("FeeCalculator.add_transaction failed")
             self._track_spent_utxos(tx, txid)
             if parents:
                 self.unconfirmed_parents[txid] = parents
@@ -101,6 +116,8 @@ class Mempool:
                         entry.ancestors.add(parent)
             logger.info(f"Added transaction {txid[:16]} to mempool (fee: {fee} sat, size: {size})")
         await self._broadcast_tx_inv(tx, source_peer)
+        # Clear last_reject_reason on success
+        self.last_reject_reason = None
         return True
 
     async def _broadcast_tx_inv(self, tx: Transaction, source_peer: Optional[str]) -> None:

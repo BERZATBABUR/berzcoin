@@ -9,13 +9,9 @@ from shared.utils.logging import get_logger
 logger = get_logger()
 
 class DNSSeeds:
-    DEFAULT_SEEDS = [
-        "seed.berzcoin.sipa.be",
-        "dnsseed.berzcoin.dashjr.org",
-        "seed.berzcoin.launchpad.net",
-        "seed.berzcoin.bitcoinperu.com",
-        "seed.berzcoin.obliquetech.com",
-    ]
+    # No hardcoded seeds by default; operators should provide `dnsseeds`
+    # in config or supply a `bootstrap_nodes.json` in the datadir.
+    DEFAULT_SEEDS: list = []
 
     def __init__(self, seeds: List[str] = None, timeout: int = 5):
         self.seeds = seeds or self.DEFAULT_SEEDS

@@ -78,7 +78,7 @@ class WalletHandlers:
         if fee_rate is not None:
             fee = int(fee_rate * 250)
 
-        txid = self.node.wallet.send_to_address(address, satoshis, fee)
+        txid = await self.node.wallet.send_to_address(address, satoshis, fee)
 
         if not txid:
             raise ValueError('Failed to send transaction')

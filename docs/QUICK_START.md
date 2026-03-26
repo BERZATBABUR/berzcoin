@@ -131,6 +131,7 @@ Use `--rpc-cookie-file /path/to/.cookie` or `--rpc-password` if RPC is not the d
 `berzcoind` does not implement `-daemon`; run it under **systemd**, **tmux**, or `nohup`, and use a proper config.
 
 **Do not** copy `configs/mainnet_seeds.toml` directly to `berzcoin.conf`—that file is **TOML** for documentation. The node reads **INI** (`ConfigParser`). Start from **`configs/secure_mainnet.toml`** and set **`dnsseed`** / **`dnsseeds`** to your production seed hostnames (comma-separated).
+Note: DNS seeding is disabled by default in shipped nodes to avoid a centralized bootstrap trust. Enable `dnsseed = true` and populate `dnsseeds` or provide a `bootstrap_nodes.json` in your datadir when you run a public node.
 
 ```bash
 # 1. Example: base secure profile (edit paths, rpcbind, dnsseeds, wallet section as needed)

@@ -41,6 +41,7 @@ class ChainState:
         self._best_block_hash: Optional[str] = None
         self._best_height: int = -1
         self._best_chainwork: int = 0
+        self._wallet_callback = None
     
     def initialize(self) -> None:
         self.block_index.load()
@@ -141,6 +142,17 @@ class ChainState:
         self._best_chainwork = chainwork
         self.block_index.mark_main_chain(block_hash, True)
         logger.info(f"New best block: {block_hash[:16]} at height {height}")
+        
+        # Notify wallet of new block
+        if self._wallet_callback:
+            try:
+                self._wallet_callback()
+            except Exception as e:
+                logger.warning(f"Wallet callback failed: {e}")
+    
+    def set_wallet_callback(self, callback: callable) -> None:
+        """Set callback to notify wallet when new blocks are connected."""
+        self._wallet_callback = callback
     
     def get_block(self, block_hash: str) -> Optional[Block]:
         entry = self.block_index.get_block(block_hash)

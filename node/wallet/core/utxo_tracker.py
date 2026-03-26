@@ -132,23 +132,41 @@ class UTXOTracker:
             utxos = [u for u in utxos if not u.spent]
         return utxos
     
-    def get_utxos_for_account(self, account: Optional[str] = None) -> List[UTXO]:
-        """Get UTXOs for account.
-        
-        Args:
-            account: Account name
-        
-        Returns:
-            List of UTXOs
-        """
-        # In production, filter by account
+    def get_utxos_for_account(self, account: str = None) -> List[UTXO]:
+        """Get UTXOs for account - FIXED to return actual UTXOs."""
         all_utxos = []
-        for txid_dict in self.utxos.values():
-            for utxo in txid_dict.values():
+        
+        # Get all wallet addresses
+        addresses = self.address_utxos.keys()
+        
+        for address in addresses:
+            utxos = self.address_utxos.get(address, [])
+            for utxo in utxos:
                 if not utxo.spent:
                     all_utxos.append(utxo)
         
         return all_utxos
+    
+    def update_from_chain(self, chainstate, addresses: List[str]) -> None:
+        """Update UTXOs from chain state - FIX to properly sync."""
+        for address in addresses:
+            # Get UTXOs from chain
+            chain_utxos = chainstate.get_utxos_for_address(address, 1000)
+            
+            for utxo in chain_utxos:
+                # Check if we already have this UTXO
+                existing = self.get_utxo(utxo['txid'], utxo['index'])  # Use 'index' not 'vout'
+                if not existing:
+                    # Add new UTXO
+                    self.add_utxo(
+                        txid=utxo['txid'],
+                        vout=utxo['index'],  # Use 'index' not 'vout'
+                        amount=utxo['value'],
+                        address=address,
+                        script_pubkey=utxo['script_pubkey'],
+                        height=utxo['height'],
+                        is_coinbase=utxo.get('is_coinbase', False)
+                    )
     
     def get_balance(self, address: Optional[str] = None) -> int:
         """Get balance.

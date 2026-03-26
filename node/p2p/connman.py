@@ -3,6 +3,7 @@
 import asyncio
 import random
 from typing import Any, List, Dict, Set, Optional, Callable
+from pathlib import Path
 from shared.utils.logging import get_logger
 from .peer import Peer
 from .addrman import AddrMan
@@ -38,6 +39,7 @@ class ConnectionManager:
         self._connect_task: Optional[asyncio.Task] = None
         self._discover_task: Optional[asyncio.Task] = None
         self._peer_discover_interval_secs = 300
+        self._server: Optional[asyncio.base_events.Server] = None
 
     def _default_p2p_port(self) -> int:
         if self.node_config:
@@ -57,9 +59,71 @@ class ConnectionManager:
         for addr in cfg.get_connect_peers():
             self.addrman.add_static_peer(addr)
 
+    async def _load_bootstrap_nodes(self):
+        """Load bootstrap nodes from config file."""
+        # Determine datadir path
+        if self.node_config and hasattr(self.node_config, 'get_datadir'):
+            datadir = Path(self.node_config.get_datadir())
+        else:
+            datadir = Path.cwd()
+
+        bootstrap_path = datadir / "bootstrap_nodes.json"
+
+        if not bootstrap_path.exists():
+            # Use hardcoded seeds from config if available
+            seeds = []
+            try:
+                if self.node_config:
+                    seeds = self.node_config.get('hardcoded_seeds', [])
+            except Exception:
+                seeds = []
+            for seed in seeds:
+                self.addrman.add_static_peer(seed)
+            return
+
+        try:
+            import json
+            with open(bootstrap_path, 'r') as f:
+                data = json.load(f)
+
+            # Add hardcoded seeds
+            for seed in data.get('hardcoded_seeds', []):
+                self.addrman.add_static_peer(seed)
+
+            # Add DNS seeds
+            for seed in data.get('bootstrap_nodes', []):
+                if 'address' in seed:
+                    # Resolve DNS seed
+                    await self._resolve_dns_seed(seed['address'], seed.get('port', self._default_p2p_port()))
+
+            logger.info(f"Loaded {len(self.addrman.get_static_peers())} bootstrap nodes")
+        except Exception as e:
+            logger.error(f"Failed to load bootstrap nodes: {e}")
+
+    async def _resolve_dns_seed(self, hostname, port):
+        """Resolve DNS seed to IP addresses."""
+        try:
+            addrs = await asyncio.get_event_loop().getaddrinfo(hostname, port)
+            for addr in addrs:
+                ip = addr[4][0]
+                self.addrman.add_static_peer(f"{ip}:{port}")
+        except Exception as e:
+            logger.debug(f"Failed to resolve {hostname}: {e}")
+
     async def start(self) -> None:
         self._running = True
         self._load_peers_from_config()
+        # Start inbound listener unless in connect-only mode.
+        if not self.connect_only:
+            try:
+                bind = "0.0.0.0"
+                port = self.node_config.get("port", 8333) if self.node_config else 8333
+                host = bind
+                self._server = await asyncio.start_server(self.accept_connection, host, int(port))
+                logger.info(f"P2P listener started on {host}:{port}")
+            except Exception as e:
+                logger.error(f"Failed to start P2P listener: {e}")
+
         self._connect_task = asyncio.create_task(self._maintain_connections())
         self._discover_task = asyncio.create_task(self._discover_loop())
         logger.info("Connection manager started")
@@ -70,6 +134,12 @@ class ConnectionManager:
             self._connect_task.cancel()
         if self._discover_task:
             self._discover_task.cancel()
+        if self._server:
+            try:
+                self._server.close()
+                await self._server.wait_closed()
+            except Exception:
+                pass
         for peer in list(self.peers.values()):
             await peer.disconnect()
         self.peers.clear()
@@ -195,6 +265,20 @@ class ConnectionManager:
         for peer in self.peers.values():
             if peer.address not in exclude and peer.connected:
                 await peer.send_message(command, payload)
+
+    async def broadcast_block(self, block) -> None:
+        """Broadcast mined block to all peers."""
+        from shared.protocol.messages import InvMessage
+
+        block_hash = block.header.hash()
+        inv = InvMessage(inventory=[(InvMessage.InvType.MSG_BLOCK, block_hash)])
+
+        # Broadcast to all peers
+        for peer in self.peers.values():
+            if peer.connected:
+                await peer.send_message('inv', inv.serialize())
+
+        logger.info(f"Block broadcast to {len(self.peers)} peers")
 
     async def send_to_random(self, command: str, payload: bytes, count: int = 1) -> None:
         if not self.peers:

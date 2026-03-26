@@ -278,7 +278,7 @@ setInterval(refresh, 5000);
         if amount <= 0:
             return web.json_response({"error": "Amount must be positive"}, status=400)
         satoshis = int(amount * 100_000_000)
-        txid = self.node.wallet.send_to_address(address, satoshis)
+        txid = await self.node.wallet.send_to_address(address, satoshis)
         if not txid:
             return web.json_response(
                 {

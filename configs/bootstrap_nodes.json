@@ -1,49 +1,23 @@
 {
+  "version": 1,
   "bootstrap_nodes": [
+    {
+      "address": "seed1.berzcoin.org",
+      "port": 8333,
+      "services": 1,
+      "last_seen": 0
+    },
+    {
+      "address": "seed2.berzcoin.org",
+      "port": 8333,
+      "services": 1,
+      "last_seen": 0
+    }
+  ],
+  "hardcoded_seeds": [
     "45.76.123.45:8333",
     "108.61.123.45:8333",
-    "207.148.123.45:8333",
-    "seed1.berzcoin.org:8333",
-    "seed2.berzcoin.org:8333"
-  ],
-  "seeds": [
-    "seed.berzcoin.sipa.be",
-    "dnsseed.berzcoin.dashjr.org",
-    "seed.berzcoin.launchpad.net"
+    "207.148.123.45:8333"
   ],
   "last_updated": 1700000000
-}
-
-{
-  "dns_seeds": [
-    "seed1.berzcoin.org",
-    "seed2.berzcoin.org",
-    "seed3.berzcoin.org",
-    "dnsseed.berzcoin.org"
-  ],
-  "bootstrap_nodes": [],
-  "p2p_port": 8333,
-  "last_updated": 1774378232,
-  "per_seed": {
-    "seed1.berzcoin.org": {
-      "status": "error",
-      "error": "[Errno -2] Name or service not known",
-      "count": 0
-    },
-    "seed2.berzcoin.org": {
-      "status": "error",
-      "error": "[Errno -2] Name or service not known",
-      "count": 0
-    },
-    "seed3.berzcoin.org": {
-      "status": "error",
-      "error": "[Errno -2] Name or service not known",
-      "count": 0
-    },
-    "dnsseed.berzcoin.org": {
-      "status": "error",
-      "error": "[Errno -2] Name or service not known",
-      "count": 0
-    }
-  }
 }

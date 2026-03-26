@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from node.app.main import BerzCoinNode
 from node.mining.block_assembler import BlockAssembler
-from node.mining.miner import CPUMiner
+from node.mining.miner import MiningNode
 from node.rpc.handlers.mining import MiningHandlers
 
 
@@ -83,7 +83,8 @@ async def test_send_receive() -> None:
         addr1,
         network="regtest",
     )
-    node.miner = CPUMiner(node.chainstate, block_assembler, addr1)
+    # Use new MiningNode with explicit mempool
+    node.miner = MiningNode(node.chainstate, node.mempool, addr1)
 
     mining_handlers = MiningHandlers(node)
     mined = await mining_handlers.generate(101, addr1)
@@ -104,7 +105,7 @@ async def test_send_receive() -> None:
 
     print(f"\n5. Sending 10 BTC to {addr2}...")
     amount = 10 * 100_000_000
-    txid = node.wallet.send_to_address(addr2, amount)
+    txid = await node.wallet.send_to_address(addr2, amount)
 
     if txid:
         print(f"   Transaction sent: {txid[:16]}...")

@@ -55,12 +55,13 @@ class ConsensusParams:
             max_block_size=1000000,
             max_block_weight=4000000,
             max_block_sigops=20000,
-            pow_target_spacing=600,  # 10 minutes
+            pow_target_spacing=120,  # 2 minutes
             pow_target_timespan=1209600,  # 2 weeks
             pow_limit=0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
             pow_no_retargeting=False,
-            initial_subsidy=50 * 100000000,  # 50 BTC in satoshis
-            subsidy_halving_interval=210000,
+            initial_subsidy=2 * 100000000,  # 2 BerzCoin in satoshis
+            # Halving every 4 years -> blocks = (4*365*24*3600) / spacing
+            subsidy_halving_interval=1051200,
             bip34_height=227931,
             bip66_height=363725,
             bip65_height=388381,
@@ -92,8 +93,9 @@ class ConsensusParams:
         """Testnet consensus parameters."""
         params = cls.mainnet()
         params.pow_limit = 0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff
-        params.pow_no_retargeting = True
-        params.initial_subsidy = 50 * 100000000
+        # Enable retargeting and use mainnet subsidy (2 BerzCoin)
+        params.pow_no_retargeting = False
+        params.initial_subsidy = 2 * 100000000
         params.bip34_height = 21111
         params.bip66_height = 330776
         params.bip65_height = 330776
@@ -112,10 +114,11 @@ class ConsensusParams:
     def regtest(cls) -> 'ConsensusParams':
         """Regression test consensus parameters."""
         params = cls.mainnet()
-        params.pow_target_spacing = 600
+        # Use fast 2-minute blocks and enable difficulty retargeting for regtest
+        params.pow_target_spacing = 120
         params.pow_target_timespan = 1209600
         params.pow_limit = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
-        params.pow_no_retargeting = True
+        params.pow_no_retargeting = False
         params.bip34_height = 100000000  # Never activates
         params.bip66_height = 100000000
         params.bip65_height = 100000000

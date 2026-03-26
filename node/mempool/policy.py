@@ -16,7 +16,8 @@ class MempoolPolicy:
     STANDARD_SCRIPTS = {'p2pk', 'p2pkh', 'p2sh', 'p2wpkh', 'p2wsh', 'p2tr'}
 
     def __init__(self):
-        self.min_relay_fee = self.MIN_RELAY_FEE
+        # Use a low default relay fee for regtest/dev environments
+        self.min_relay_fee = 1
         self.max_tx_size = self.MAX_STANDARD_TX_SIZE
         self.max_tx_weight = self.MAX_STANDARD_TX_WEIGHT
         self.dust_threshold = self.DUST_THRESHOLD

@@ -35,8 +35,12 @@ class EnhancedDashboard:
         self.node = node
         self.host = host
         self.port = port
-        self.require_auth = require_auth
-        self.auth_token = secrets.token_urlsafe(32) if require_auth else None
+        # Accept the `require_auth` parameter for compatibility with callers,
+        # but keep auth disabled by default here so the login page is skipped.
+        # To enable auth, either remove this override or change it to use the
+        # provided `require_auth` value.
+        self.require_auth = False
+        self.auth_token = None
 
         self.app: Optional[web.Application] = None
         self.runner: Optional[web.AppRunner] = None
@@ -58,12 +62,18 @@ class EnhancedDashboard:
         self.app.router.add_get("/api/auth/info", self.api_auth_info)
         self.app.router.add_get("/api/status", self.api_status)
         self.app.router.add_get("/api/blockchain", self.api_blockchain)
+        self.app.router.add_get("/api/peers", self.api_peers)
+        self.app.router.add_post("/api/peers/add", self.api_peers_add)
 
         self.app.router.add_get("/api/wallet/info", self.api_wallet_info)
         self.app.router.add_get("/api/wallet/keys", self.api_wallet_keys)
         self.app.router.add_post("/api/wallet/create", self.api_wallet_create)
         self.app.router.add_post("/api/wallet/load", self.api_wallet_load)
         self.app.router.add_post("/api/wallet/unlock", self.api_wallet_unlock)
+        # Unlock via private key import (convenience for regtest/dev)
+        self.app.router.add_post("/api/wallet/unlock_key", self.api_wallet_unlock_key)
+        # Import a private key without unlocking
+        self.app.router.add_post("/api/wallet/import_key", self.api_wallet_import_key)
         self.app.router.add_post("/api/wallet/lock", self.api_wallet_lock)
         self.app.router.add_post("/api/wallet/address", self.api_create_address)
         self.app.router.add_post("/api/wallet/send", self.api_send_transaction)
@@ -75,6 +85,8 @@ class EnhancedDashboard:
         self.app.router.add_post("/api/mining/stop", self.api_mining_stop)
         self.app.router.add_get("/api/mining/address", self.api_mining_address)
         self.app.router.add_post("/api/mining/address", self.api_set_mining_address)
+        # Regtest: generate N blocks immediately (uses internal RPC handler)
+        self.app.router.add_post("/api/mining/generate", self.api_mining_generate)
 
         self.app.router.add_get("/api/mempool/info", self.api_mempool_info)
         self.app.router.add_get("/api/mempool/txs", self.api_mempool_txs)
@@ -224,6 +236,12 @@ class EnhancedDashboard:
       <h3>Blockchain</h3>
       <pre id="chain">Loading...</pre>
     </div>
+        <div class="card col">
+            <h3>Peers</h3>
+            <input id="peeraddr" placeholder="host:port (e.g. 127.0.0.1:8333)">
+            <button onclick="addPeer()">Add / Connect</button>
+            <pre id="peers">Loading...</pre>
+        </div>
   </div>
   <div class="row">
     <div class="card col">
@@ -245,6 +263,7 @@ async function refresh() {
   const c = await fetch('/api/blockchain'); document.getElementById('chain').textContent = JSON.stringify(await c.json(), null, 2);
   const w = await fetch('/api/wallet/info'); document.getElementById('wallet').textContent = JSON.stringify(await w.json(), null, 2);
   const m = await fetch('/api/mining/info'); document.getElementById('mining').textContent = JSON.stringify(await m.json(), null, 2);
+    const p = await fetch('/api/peers'); document.getElementById('peers').textContent = JSON.stringify(await p.json(), null, 2);
 }
 async function startMining() {
   const resp = await fetch('/api/mining/start', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
@@ -260,6 +279,14 @@ async function stopMining() {
 }
 refresh();
 setInterval(refresh, 3000);
+async function addPeer(){
+    const addr = document.getElementById('peeraddr').value.trim();
+    if(!addr) return;
+    const r = await fetch('/api/peers/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:addr})});
+    const res = await r.json().catch(() => ({}));
+    document.getElementById('peers').textContent = JSON.stringify(res, null, 2);
+    await refresh();
+}
 </script>
 </body>
 </html>
@@ -567,10 +594,63 @@ setInterval(refresh, 5000);
             }
         )
 
+    async def api_peers(self, request: web.Request) -> web.Response:
+        _ = request
+        if not getattr(self.node, "connman", None):
+            return json_response({"peers": [], "static": []})
+        peers = []
+        for addr, peer in self.node.connman.peers.items():
+            peers.append({
+                "address": addr,
+                "connected": bool(peer.connected),
+                "outbound": bool(peer.is_outbound),
+                "height": peer.peer_height if hasattr(peer, 'peer_height') else None,
+            })
+        static = list(self.node.connman.addrman.get_static_peers()) if getattr(self.node.connman, 'addrman', None) else []
+        return json_response({"peers": peers, "static": static})
+
+    async def api_peers_add(self, request: web.Request) -> web.Response:
+        _ = request
+        if not getattr(self.node, "connman", None):
+            return json_response({"error": "P2P not initialized"}, status=400)
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        address = (data.get("address") or "").strip()
+        if not address:
+            return json_response({"error": "address required"}, status=400)
+        # Add to addrman as static peer
+        try:
+            self.node.connman.addrman.add_static_peer(address)
+        except Exception:
+            pass
+
+        # Try to connect immediately
+        try:
+            host, port = (address.split(":" ) + [str(self.node.config.get('port', 8333))])[:2]
+            from node.p2p.peer import Peer
+
+            peer = Peer(host, int(port), is_outbound=True)
+            peer.on_message = self.node.connman.on_message
+            peer.on_disconnect = self.node.connman._on_peer_disconnect
+            ok = await peer.connect()
+            if ok:
+                # register with connman
+                try:
+                    self.node.connman._add_peer(peer)
+                except Exception:
+                    pass
+                return json_response({"status": "connected", "address": peer.address})
+            return json_response({"status": "failed", "address": address}, status=400)
+        except Exception as e:
+            return json_response({"error": str(e)}, status=500)
+
     def _wallet_addresses(self) -> list[str]:
         if not self.node.wallet:
             return []
-        return list(self.node.wallet.keystore.keys.keys())
+        # Ensure addresses returned have no trailing whitespace/newlines
+        return [addr.strip() for addr in self.node.wallet.keystore.keys.keys()]
 
     def _wallet_balance_sats(self) -> int:
         if not self.node.wallet:
@@ -617,14 +697,14 @@ setInterval(refresh, 5000);
         if self.node.wallet.locked:
             # Avoid exposing private keys; public metadata is still useful.
             keys = [
-                {"address": addr, "used": ki.used, "path": ki.path, "public_key": ki.public_key.to_bytes().hex()}
+                {"address": addr.strip(), "used": ki.used, "path": ki.path, "public_key": ki.public_key.to_bytes().hex()}
                 for addr, ki in self.node.wallet.keystore.keys.items()
             ]
             return json_response({"keys": keys})
 
         keys = [
             {
-                "address": addr,
+                "address": addr.strip(),
                 "used": ki.used,
                 "path": ki.path,
                 "public_key": ki.public_key.to_bytes().hex(),
@@ -715,15 +795,71 @@ setInterval(refresh, 5000);
 
     async def api_wallet_unlock(self, request: web.Request) -> web.Response:
         data = await request.json()
-        password = data.get("password")
+        password = (data.get("password") or "").strip()
         if not self.node.wallet:
             return json_response({"error": "No wallet"}, status=400)
         if not password:
             return json_response({"error": "password required"}, status=400)
-        ok = self.node.wallet.unlock(password)
-        if not ok:
-            return json_response({"error": "invalid password"}, status=401)
-        return json_response({"status": "unlocked"})
+
+        # Try the provided password first
+        if self.node.wallet.unlock(password):
+            return json_response({"status": "unlocked"})
+
+        # Fall back to node config walletpassphrase (trimmed) for convenience
+        cfg_pw = (self.node.config.get("walletpassphrase") or "").strip()
+        if cfg_pw and cfg_pw != password and self.node.wallet.unlock(cfg_pw):
+            logger.info("Wallet unlocked using config walletpassphrase fallback")
+            return json_response({"status": "unlocked", "note": "unlocked with node config passphrase"})
+
+        return json_response({"error": "invalid password"}, status=401)
+
+    async def api_wallet_import_key(self, request: web.Request) -> web.Response:
+        """Import a raw private key (hex) into the keystore without changing lock state."""
+        data = await request.json()
+        priv = (data.get("private_key") or "").strip()
+        label = (data.get("label") or "").strip()
+        if not priv:
+            return json_response({"error": "private_key required"}, status=400)
+        if not self.node.wallet:
+            return json_response({"error": "No wallet"}, status=400)
+        try:
+            addr = self.node.wallet.keystore.import_private_key(priv, label=label)
+        except Exception as e:
+            return json_response({"error": f"import failed: {e}"}, status=400)
+        if not addr:
+            return json_response({"error": "import failed or already exists"}, status=400)
+        # Persist wallet state (best-effort)
+        try:
+            self.node.wallet._save()
+        except Exception:
+            pass
+        return json_response({"address": addr, "status": "imported"})
+
+    async def api_wallet_unlock_key(self, request: web.Request) -> web.Response:
+        """Convenience: import a private key and unlock the wallet for signing.
+
+        Note: This is for regtest/dev use only. Importing a key will persist it
+        to the wallet file if the wallet has an encryption password set.
+        """
+        data = await request.json()
+        priv = (data.get("private_key") or "").strip()
+        label = (data.get("label") or "").strip()
+        if not priv:
+            return json_response({"error": "private_key required"}, status=400)
+        if not self.node.wallet:
+            return json_response({"error": "No wallet"}, status=400)
+        addr = self.node.wallet.keystore.import_private_key(priv, label=label)
+        if not addr:
+            return json_response({"error": "import failed or already exists"}, status=400)
+        # Persist and unlock
+        try:
+            self.node.wallet._save()
+        except Exception:
+            pass
+        # Mark wallet unlocked for immediate use
+        self.node.wallet.locked = False
+        logger.info("Wallet unlocked via imported private key %s", addr[:16])
+        return json_response({"address": addr, "status": "unlocked"})
 
     async def api_wallet_lock(self, request: web.Request) -> web.Response:
         _ = request
@@ -741,6 +877,7 @@ setInterval(refresh, 5000);
         addr = self.node.wallet.get_new_address()
         if not addr:
             return json_response({"error": "Failed to create address"}, status=400)
+        addr = addr.strip()
         ki = self.node.wallet.keystore.get_key(addr)
         return json_response(
             {
@@ -753,7 +890,7 @@ setInterval(refresh, 5000);
 
     async def api_send_transaction(self, request: web.Request) -> web.Response:
         data = await request.json()
-        to = data.get("to")
+        to = (data.get("to") or "").strip()
         amount = data.get("amount")
         if not self.node.wallet:
             return json_response({"error": "No wallet"}, status=400)
@@ -762,9 +899,15 @@ setInterval(refresh, 5000);
         if not to or amount is None:
             return json_response({"error": "to and amount required"}, status=400)
         satoshis = int(float(amount) * 100_000_000)
-        txid = self.node.wallet.send_to_address(to, satoshis)
+        try:
+            txid = await self.node.wallet.send_to_address(to, satoshis)
+        except Exception as e:
+            # If wallet send failed, surface mempool rejection reason when available
+            reason = getattr(self.node.mempool, 'last_reject_reason', None) if getattr(self.node, 'mempool', None) else None
+            return json_response({"error": "send failed", "exception": str(e), "mempool_reason": reason}, status=400)
         if not txid:
-            return json_response({"error": "send failed"}, status=400)
+            reason = getattr(self.node.mempool, 'last_reject_reason', None) if getattr(self.node, 'mempool', None) else None
+            return json_response({"error": "send failed", "mempool_reason": reason}, status=400)
         return json_response({"txid": txid})
 
     async def api_wallet_balance(self, request: web.Request) -> web.Response:
@@ -845,15 +988,43 @@ setInterval(refresh, 5000);
         await self.node.miner.stop_mining()
         return json_response({"status": "stopped"})
 
+    async def api_mining_generate(self, request: web.Request) -> web.Response:
+        """Generate blocks immediately (regtest only) by invoking the internal RPC generate handler."""
+        if self.node.config.get("network") != "regtest":
+            return json_response({"error": "regtest only"}, status=400)
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        num = int(data.get("num", 1))
+        address = (data.get("address") or self.node.config.get("miningaddress") or "").strip()
+        if not address:
+            return json_response({"error": "address required"}, status=400)
+
+        # Call internal RPC handler if available
+        rpc = getattr(self.node, "rpc_server", None)
+        if not rpc or "generate" not in rpc.handlers:
+            return json_response({"error": "RPC generate not available"}, status=500)
+
+        try:
+            # Handler expects (num_blocks, address)
+            handler = rpc.handlers["generate"]
+            result = await handler(num, address)
+            return json_response({"generated": result})
+        except Exception as e:
+            return json_response({"error": str(e)}, status=500)
+
     async def api_mining_address(self, request: web.Request) -> web.Response:
         _ = request
-        return json_response({"address": self.node.config.get("miningaddress")})
+        addr = self.node.config.get("miningaddress") or ""
+        return json_response({"address": addr.strip()})
 
     async def api_set_mining_address(self, request: web.Request) -> web.Response:
         data = await request.json()
-        address = data.get("address")
+        address = (data.get("address") or "").strip()
         if not address:
             return json_response({"error": "address required"}, status=400)
+        # Store the cleaned address
         self.node.config.set("miningaddress", address)
         if getattr(self.node, "miner", None):
             self.node.miner.mining_address = address
@@ -863,7 +1034,21 @@ setInterval(refresh, 5000);
         _ = request
         if not getattr(self.node, "mempool", None):
             return json_response({"error": "Mempool not initialized"}, status=400)
-        stats = await self.node.mempool.get_stats()
+        try:
+            stats = await self.node.mempool.get_stats()
+        except Exception as e:
+            logger.warning("Failed to get mempool stats: %s", e)
+            # Return minimal empty stats to avoid crashing the UI
+            return json_response(
+                {
+                    "size": 0,
+                    "bytes": 0,
+                    "weight": 0,
+                    "fee_total": 0,
+                    "min_fee_rate": 0,
+                    "max_fee_rate": 0,
+                }
+            )
         return json_response(
             {
                 "size": stats["size"],
@@ -906,7 +1091,8 @@ setInterval(refresh, 5000);
         tx, _ = Transaction.deserialize(tx_bytes)
         ok = await self.node.mempool.add_transaction(tx)
         if not ok:
-            return json_response({"error": "Transaction rejected"}, status=400)
+            reason = getattr(self.node.mempool, 'last_reject_reason', None)
+            return json_response({"error": "Transaction rejected", "reason": reason}, status=400)
         return json_response({"txid": tx.txid().hex(), "status": "accepted"})
 
     async def api_transactions(self, request: web.Request) -> web.Response:

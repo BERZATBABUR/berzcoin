@@ -6,6 +6,7 @@ import base64
 import time
 import traceback
 import os
+import ssl
 from typing import TYPE_CHECKING, Any, Dict, Optional, Callable, Awaitable, Union
 
 from aiohttp import web
@@ -33,17 +34,26 @@ class RPCServer:
         port: int = 8332,
         rpc_dir: str = "~/.berzcoin",
         config: Optional["Config"] = None,
+        use_tls: bool = False,
+        cert_file: Optional[str] = None,
+        key_file: Optional[str] = None,
     ):
-        """Initialize RPC server.
+        """Initialize RPC server with optional TLS.
 
         Args:
             host: Listen address.
             port: Listen port.
             rpc_dir: Data directory used for RPC cookie and auth files.
             config: Node configuration; when set, ``rpcallowip`` is enforced per request.
+            use_tls: Enable TLS (HTTPS) if True.
+            cert_file: Path to TLS certificate file.
+            key_file: Path to TLS private key file.
         """
         self.host = host
         self.port = port
+        self.use_tls = use_tls
+        self.cert_file = cert_file
+        self.key_file = key_file
         self.config: Optional["Config"] = config
         self.auth = AuthManager(os.path.expanduser(rpc_dir))
         self.handlers: Dict[str, HandlerType] = {}
@@ -69,10 +79,16 @@ class RPCServer:
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
 
-        site = web.TCPSite(self.runner, self.host, self.port)
+        if getattr(self, 'use_tls', False) and self.cert_file and self.key_file:
+            ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            ssl_context.load_cert_chain(self.cert_file, self.key_file)
+            site = web.TCPSite(self.runner, self.host, self.port, ssl_context=ssl_context)
+        else:
+            site = web.TCPSite(self.runner, self.host, self.port)
+
         await site.start()
 
-        logger.info(f"RPC server started on {self.host}:{self.port}")
+        logger.info(f"RPC server started on {'https' if getattr(self, 'use_tls', False) else 'http'}://{self.host}:{self.port}")
 
     async def stop(self) -> None:
         """Stop RPC server."""

@@ -253,6 +253,15 @@ class Transaction:
             Total value in satoshis
         """
         return sum(txout.value for txout in self.vout)
+
+    def size(self) -> int:
+        """Return serialized transaction size in bytes (includes witness if present)."""
+        return len(self.serialize(include_witness=True))
+
+    def weight(self) -> int:
+        """Return transaction weight (base_size*3 + total_size)."""
+        from ..consensus.weights import calculate_transaction_weight
+        return calculate_transaction_weight(self)
     
     def __repr__(self) -> str:
         """String representation."""

@@ -45,36 +45,44 @@ class DNSSeedServer:
         await self.load_nodes()
 
         serial = int(time.time())
-        zone = f\"\"\"$ORIGIN {self.domain}.
-$TTL 3600
-@       IN SOA ns1.{self.domain}. admin.{self.domain}. (
-            {serial}  ; Serial
-            3600      ; Refresh
-            900       ; Retry
-            86400     ; Expire
-            3600      ; Minimum
+        zone = (
+            f"$ORIGIN {self.domain}.\n"
+            f"$TTL 3600\n"
+            f"@       IN SOA ns1.{self.domain}."
+            f" admin.{self.domain}. (\n"
+            f"            {serial}  ; Serial\n"
+            f"            3600      ; Refresh\n"
+            f"            900       ; Retry\n"
+            f"            86400     ; Expire\n"
+            f"            3600      ; Minimum\n"
+            f"        )\n"
+            f"        IN NS ns1.{self.domain}.\n"
+            f"        IN NS ns2.{self.domain}.\n"
+            f"\n"
+            f"ns1     IN A YOUR_NAMESERVER_IP\n"
+            f"ns2     IN A YOUR_NAMESERVER_IP\n"
         )
-        IN NS ns1.{self.domain}.
-        IN NS ns2.{self.domain}.
-
-ns1     IN A YOUR_NAMESERVER_IP
-ns2     IN A YOUR_NAMESERVER_IP
-\"\"\"
 
         for node in self.nodes:
-            zone += f\"seed\\tIN A\\t{node}\\n\"
+            zone += f"seed\tIN A\t{node}\n"
 
-        out = Path(f\"{self.domain}.zone\")
+        out = Path(f"{self.domain}.zone")
         out.write_text(zone, encoding="utf-8")
-        print(f\"DNS zone file generated: {out}\")
+        print(f"DNS zone file generated: {out}")
 
 
 async def _amain() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Generate DNS seed zone file")
-    parser.add_argument("--domain", required=True, help="seed domain (e.g. seed.berzcoin.org)")
-    parser.add_argument("--nodes-file", default="known_nodes.json", help="JSON file with {'nodes': ['IP', ...]}")
+    parser.add_argument(
+        "--domain", required=True,
+        help="seed domain (e.g. seed.berzcoin.org)",
+    )
+    parser.add_argument(
+        "--nodes-file", default="known_nodes.json",
+        help="JSON file with {'nodes': ['IP', ...]}",
+    )
     args = parser.parse_args()
 
     srv = DNSSeedServer(domain=args.domain, nodes_file=args.nodes_file)

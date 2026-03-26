@@ -22,23 +22,19 @@ class TransactionBuilder:
     
     def create_transaction(self, inputs: List[Tuple[str, int, int]], 
                           outputs: List[Tuple[str, int]],
-                          change_address: Optional[str] = None,
-                          fee: Optional[int] = None) -> Transaction:
-        """Create a new transaction.
+                          change_address: str = None,
+                          fee: int = None) -> Transaction:
+        """Create a new transaction - FIXED with proper UTXO handling."""
         
-        Args:
-            inputs: List of (txid, vout, amount)
-            outputs: List of (address, amount)
-            change_address: Address for change output
-            fee: Optional fee (auto-calculated if None)
+        # Validate inputs
+        if not inputs:
+            raise ValueError("No inputs provided")
         
-        Returns:
-            Unsigned transaction
-        """
         # Create transaction
         tx = Transaction(version=2)
         
         # Add inputs
+        total_in = 0
         for txid, vout, amount in inputs:
             txin = TxIn(
                 prev_tx_hash=bytes.fromhex(txid),
@@ -47,6 +43,7 @@ class TransactionBuilder:
                 sequence=0xffffffff
             )
             tx.vin.append(txin)
+            total_in += amount
         
         # Add outputs
         total_out = 0
@@ -59,16 +56,15 @@ class TransactionBuilder:
             tx.vout.append(txout)
             total_out += amount
         
-        # Calculate total input
-        total_in = sum(amount for _, _, amount in inputs)
-        
         # Calculate fee if not provided
         if fee is None:
-            # Estimate fee (simplified)
-            fee = self._estimate_fee(len(inputs), len(outputs) + (1 if change_address else 0))
+            # Estimate fee: 150 bytes per input, 34 bytes per output
+            estimated_size = 10 + len(inputs) * 150 + len(outputs) * 34
+            fee = estimated_size * 1  # 1 sat/vbyte minimum
         
-        # Add change output if needed
+        # Calculate change
         change_amount = total_in - total_out - fee
+        
         if change_amount > 0:
             if change_address:
                 script_pubkey = self._create_script_pubkey(change_address)
@@ -77,7 +73,9 @@ class TransactionBuilder:
                 # No change address, add to fee
                 fee += change_amount
         
-        logger.debug(f"Created transaction: {len(tx.vin)} inputs, {len(tx.vout)} outputs, fee={fee}")
+        logger.debug(f"Created transaction: {len(tx.vin)} inputs, {len(tx.vout)} outputs, "
+                    f"total_in={total_in}, total_out={total_out}, fee={fee}")
+        
         return tx
     
     def _create_script_pubkey(self, address: str) -> bytes:
