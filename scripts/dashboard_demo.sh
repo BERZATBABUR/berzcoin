@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Demo: start a regtest node + web dashboard, create/unlock wallet, mine coins, then send.
+# Demo: start a regtest node + web dashboard, activate private-key wallet, mine coins, then send.
 #
 # This matches this repo's behavior:
 # - Config is INI (ConfigParser)
@@ -16,9 +16,103 @@ CONF="${DATADIR}/berzcoin.conf"
 RPC_PORT="${BERZCOIN_DEMO_RPC_PORT:-18443}"
 P2P_PORT="${BERZCOIN_DEMO_P2P_PORT:-18444}"
 WEB_PORT="${BERZCOIN_DEMO_WEB_PORT:-8080}"
+RESET_DATADIR=0
 
-WALLET_NAME="demo"
-WALLET_PASSWORD="${BERZCOIN_DEMO_WALLET_PASSWORD:-demo-$(openssl rand -hex 8)}"
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [options]
+
+Start a local regtest demo node + dashboard.
+
+Options:
+  --datadir PATH       Demo datadir (default: ${DATADIR})
+  --rpc-port PORT      RPC port (default: ${RPC_PORT})
+  --p2p-port PORT      P2P port (default: ${P2P_PORT})
+  --web-port PORT      Dashboard port (default: ${WEB_PORT})
+  --reset-datadir      Delete datadir before start (destructive)
+  -h, --help           Show this help
+
+Safety:
+  By default this script does NOT delete existing datadir contents.
+  Use --reset-datadir only for disposable demo data.
+EOF
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --datadir)
+        if [[ $# -lt 2 ]]; then
+          echo "error: --datadir requires a value" >&2
+          exit 2
+        fi
+        DATADIR="$2"
+        shift 2
+        ;;
+      --rpc-port)
+        if [[ $# -lt 2 ]]; then
+          echo "error: --rpc-port requires a value" >&2
+          exit 2
+        fi
+        RPC_PORT="$2"
+        shift 2
+        ;;
+      --p2p-port)
+        if [[ $# -lt 2 ]]; then
+          echo "error: --p2p-port requires a value" >&2
+          exit 2
+        fi
+        P2P_PORT="$2"
+        shift 2
+        ;;
+      --web-port)
+        if [[ $# -lt 2 ]]; then
+          echo "error: --web-port requires a value" >&2
+          exit 2
+        fi
+        WEB_PORT="$2"
+        shift 2
+        ;;
+      --reset-datadir)
+        RESET_DATADIR=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        echo "error: unknown option: $1" >&2
+        usage >&2
+        exit 2
+        ;;
+    esac
+  done
+}
+
+safe_reset_datadir() {
+  local target="$1"
+
+  if [[ -z "${target}" || "${target}" == "/" ]]; then
+    echo "error: refusing to delete unsafe datadir path: '${target}'" >&2
+    exit 1
+  fi
+
+  if [[ "${target}" == "${HOME}" || "${target}" == "${HOME}/" ]]; then
+    echo "error: refusing to delete HOME directory: '${target}'" >&2
+    exit 1
+  fi
+
+  if [[ "${target}" == "${HOME}/.berzcoin" ]]; then
+    echo "error: refusing to delete main datadir '${target}' from demo script" >&2
+    exit 1
+  fi
+
+  rm -rf -- "${target}"
+}
+
+parse_args "$@"
+CONF="${DATADIR}/berzcoin.conf"
 
 cleanup() {
   if [[ -n "${NODE_PID:-}" ]] && kill -0 "${NODE_PID}" 2>/dev/null; then
@@ -32,7 +126,11 @@ trap cleanup EXIT INT TERM
 echo "[*] BerzCoin dashboard demo (regtest)"
 echo "    datadir: ${DATADIR}"
 
-rm -rf "${DATADIR}"
+if [[ "${RESET_DATADIR}" == "1" ]]; then
+  echo "[*] Reset requested; deleting datadir: ${DATADIR}"
+  safe_reset_datadir "${DATADIR}"
+fi
+
 mkdir -p "${DATADIR}"
 chmod 700 "${DATADIR}" || true
 
@@ -41,8 +139,6 @@ cat > "${CONF}" << EOF
 network = regtest
 datadir = ${DATADIR}
 
-wallet = ${WALLET_NAME}
-walletpassphrase = ${WALLET_PASSWORD}
 disablewallet = false
 
 webdashboard = true
@@ -102,8 +198,14 @@ if ! wait_for_rpc; then
   exit 1
 fi
 
-echo "[*] Unlocking wallet..."
-rpc_cli unlockwallet "${WALLET_PASSWORD}" --timeout 86400 >/dev/null
+echo "[*] Creating private-key wallet and activating it..."
+WALLET_JSON="$(rpc_cli createwallet default | tr -d '\r')"
+WALLET_KEY="$(echo "${WALLET_JSON}" | sed -n 's/.*"private_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+if [[ -z "${WALLET_KEY}" ]]; then
+  echo "error: failed to derive private key from createwallet output" >&2
+  exit 1
+fi
+rpc_cli activatewallet "${WALLET_KEY}" >/dev/null
 
 echo "[*] Creating a mining/receive address..."
 ADDR="$(rpc_cli getnewaddress | tail -1 | tr -d '\r')"
@@ -119,7 +221,7 @@ echo "[*] Balance: ${BAL} BERZ"
 echo ""
 echo "[OK] Demo is ready"
 echo "    Dashboard: http://127.0.0.1:${WEB_PORT}/"
-echo "    Wallet password: ${WALLET_PASSWORD}"
+echo "    Wallet private key: ${WALLET_KEY}"
 echo ""
 echo "Try sending to a new address:"
 echo "  TO=\$(rpc_cli getnewaddress | tail -1)"

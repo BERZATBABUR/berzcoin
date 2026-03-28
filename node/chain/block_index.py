@@ -57,6 +57,7 @@ class BlockIndex:
             SELECT * FROM block_headers 
             ORDER BY height
         """)
+        best_by_work: Optional[BlockIndexEntry] = None
         for result in results:
             header = BlockHeader(
                 version=result['version'],
@@ -78,12 +79,23 @@ class BlockIndex:
             )
             self._index[result['hash']] = entry
             self._height_index[result['height']] = result['hash']
-            if result['height'] > self._best_height:
-                self._best_height = result['height']
-                self._best_hash = result['hash']
+            if best_by_work is None or entry.chainwork > best_by_work.chainwork:
+                best_by_work = entry
+            elif best_by_work is not None and entry.chainwork == best_by_work.chainwork and entry.height > best_by_work.height:
+                best_by_work = entry
+        if best_by_work is not None:
+            self._best_height = best_by_work.height
+            self._best_hash = best_by_work.block_hash
+            self._rebuild_main_chain_height_index(best_by_work.block_hash)
         logger.info(f"Loaded {len(self._index)} blocks from index")
 
-    def add_block(self, block: Block, height: int, chainwork: int) -> BlockIndexEntry:
+    def add_block(
+        self,
+        block: Block,
+        height: int,
+        chainwork: int,
+        update_best: bool = True,
+    ) -> BlockIndexEntry:
         block_hash = block.header.hash_hex()
         entry = BlockIndexEntry(
             height=height,
@@ -93,10 +105,8 @@ class BlockIndex:
             status=BlockStatus.HEADER | BlockStatus.BLOCK | BlockStatus.VALID
         )
         self._index[block_hash] = entry
-        self._height_index[height] = block_hash
-        if chainwork > self.get_best_chainwork():
-            self._best_height = height
-            self._best_hash = block_hash
+        if update_best and chainwork > self.get_best_chainwork():
+            self.set_best_chain_tip(block_hash)
         logger.debug(f"Added block {block_hash[:16]} at height {height} to index")
         return entry
 
@@ -162,8 +172,38 @@ class BlockIndex:
         if entry:
             if is_main:
                 entry.set_status(BlockStatus.MAIN_CHAIN)
+                self._height_index[entry.height] = block_hash
             else:
                 entry.clear_status(BlockStatus.MAIN_CHAIN)
+                if self._height_index.get(entry.height) == block_hash:
+                    del self._height_index[entry.height]
+
+    def set_best_chain_tip(self, block_hash: str) -> None:
+        """Select tip and rebuild main-chain status/height map from parent links."""
+        tip = self._index.get(block_hash)
+        if tip is None:
+            return
+        self._best_hash = tip.block_hash
+        self._best_height = tip.height
+        self._rebuild_main_chain_height_index(block_hash)
+
+    def _rebuild_main_chain_height_index(self, tip_hash: str) -> None:
+        chain_hashes = set()
+        chain_map: Dict[int, str] = {}
+        current = self._index.get(tip_hash)
+        while current is not None:
+            chain_hashes.add(current.block_hash)
+            chain_map[current.height] = current.block_hash
+            current = self._index.get(current.header.prev_block_hash.hex())
+
+        # Clear all main-chain flags then set for active chain.
+        for entry in self._index.values():
+            if entry.block_hash in chain_hashes:
+                entry.set_status(BlockStatus.MAIN_CHAIN)
+            else:
+                entry.clear_status(BlockStatus.MAIN_CHAIN)
+
+        self._height_index = chain_map
 
     def size(self) -> int:
         return len(self._index)

@@ -47,12 +47,6 @@ class MiningCommands:
         p.add_argument('address', help='Mining reward address')
         p.set_defaults(command='setminingaddress')
 
-        p = subparsers.add_parser('getminingworkers', help='Get connected Stratum workers')
-        p.set_defaults(command='getminingworkers')
-
-        p = subparsers.add_parser('setminingdifficulty', help='Set Stratum share difficulty')
-        p.add_argument('difficulty', type=float, help='Share difficulty')
-        p.set_defaults(command='setminingdifficulty')
 
     async def get_mining_info(self):
         return await self.handler.call('get_mining_info')
@@ -77,9 +71,3 @@ class MiningCommands:
 
     async def set_mining_address(self, address: str) -> Any:
         return await self.handler.call('setminingaddress', address)
-
-    async def get_mining_workers(self) -> Any:
-        return await self.handler.call('getminingworkers')
-
-    async def set_mining_difficulty(self, difficulty: float) -> Any:
-        return await self.handler.call('setminingdifficulty', difficulty)

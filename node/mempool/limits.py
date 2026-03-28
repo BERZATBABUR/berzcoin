@@ -14,9 +14,45 @@ class MempoolLimits:
     max_transactions: int = 50_000
     max_ancestors: int = 25
     max_descendants: int = 25
+    max_ancestor_size_vbytes: int = 101_000
+    max_descendant_size_vbytes: int = 101_000
     max_orphans: int = 100
     min_fee_rate: int = 1000
     expiry_hours: int = 336
+    max_package_count: int = 25
+    max_package_weight: int = 404_000
+
+    def can_accept(
+        self,
+        size: int,
+        weight: int,
+        current_count: int,
+        current_size: int = 0,
+        current_weight: int = 0,
+    ) -> bool:
+        if current_size + size > self.max_size:
+            return False
+        if current_weight + weight > self.max_weight:
+            return False
+        if current_count + 1 > self.max_transactions:
+            return False
+        return True
+
+    def get_stats(self) -> Dict[str, int]:
+        return {
+            "max_size": self.max_size,
+            "max_weight": self.max_weight,
+            "max_transactions": self.max_transactions,
+            "max_ancestors": self.max_ancestors,
+            "max_descendants": self.max_descendants,
+            "max_ancestor_size_vbytes": self.max_ancestor_size_vbytes,
+            "max_descendant_size_vbytes": self.max_descendant_size_vbytes,
+            "max_orphans": self.max_orphans,
+            "min_fee_rate": self.min_fee_rate,
+            "expiry_hours": self.expiry_hours,
+            "max_package_count": self.max_package_count,
+            "max_package_weight": self.max_package_weight,
+        }
 
 class MempoolLimitsManager:
     def __init__(self, limits: MempoolLimits = None):

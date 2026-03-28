@@ -18,6 +18,8 @@ from node.app.main import BerzCoinNode
 from node.mining.block_assembler import BlockAssembler
 from node.mining.miner import MiningNode
 from node.rpc.handlers.mining import MiningHandlers
+from node.rpc.handlers.wallet import WalletHandlers
+from node.wallet.simple_wallet import SimpleWallet
 
 
 async def test_send_receive() -> None:
@@ -41,20 +43,21 @@ async def test_send_receive() -> None:
         print("Failed to initialize node")
         return
 
-    if node.wallet and node.wallet.locked:
-        node.wallet.unlock("")
-
-    print("2. Creating wallet / addresses...")
-    if not node.wallet:
-        print("No wallet loaded")
+    wallet_manager = node.simple_wallet_manager
+    if wallet_manager is None:
+        print("No simple wallet manager loaded")
         if node.db:
             node.db.disconnect()
         return
 
-    addr1 = node.wallet.get_new_address()
-    addr2 = node.wallet.get_new_address()
+    print("2. Creating wallet / addresses...")
+    wallet = wallet_manager.create_wallet()
+    wallet_manager.active_wallet = wallet
+    wallet_manager.active_private_key = wallet.private_key_hex
+    addr1 = wallet.address
+    addr2 = SimpleWallet.create(network="regtest").address
     if not addr1 or not addr2:
-        print("Could not obtain addresses (wallet locked or keypool empty)")
+        print("Could not obtain addresses")
         if node.db:
             node.db.disconnect()
         return
@@ -93,9 +96,9 @@ async def test_send_receive() -> None:
     if len(mined) > 3:
         print(f"   ... and {len(mined) - 3} more")
 
-    balance = node.wallet.get_balance()
+    balance = int(node.chainstate.get_balance(addr1))
     print(
-        f"\n4. Balance after mining: {balance} satoshis ({balance / 100_000_000} BTC)"
+        f"\n4. Balance after mining: {balance} satoshis ({balance / 100_000_000} BERZ)"
     )
 
     if balance == 0:
@@ -105,7 +108,8 @@ async def test_send_receive() -> None:
 
     print(f"\n5. Sending 10 BTC to {addr2}...")
     amount = 10 * 100_000_000
-    txid = await node.wallet.send_to_address(addr2, amount)
+    wallet_handlers = WalletHandlers(node)
+    txid = await wallet_handlers.send_to_address(addr2, amount / 100_000_000)
 
     if txid:
         print(f"   Transaction sent: {txid[:16]}...")
@@ -116,9 +120,9 @@ async def test_send_receive() -> None:
         mined2 = await mining_handlers.generate(1, addr1)
         if mined2:
             await asyncio.sleep(1)
-            balance1 = node.wallet.get_balance()
+            balance1 = int(node.chainstate.get_balance(addr1))
             print("\n7. Final balances:")
-            print(f"   Wallet balance: {balance1} satoshis ({balance1 / 100_000_000} BTC)")
+            print(f"   Wallet balance: {balance1} satoshis ({balance1 / 100_000_000} BERZ)")
 
             tx_info = node.chainstate.get_transaction(txid)
             if tx_info and tx_info.get("block_height") is not None:

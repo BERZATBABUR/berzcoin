@@ -61,9 +61,7 @@ def main() -> None:
         "--hidden-import",
         "urllib.request",
         "--hidden-import",
-        "node.wallet.core.wallet",
-        "--hidden-import",
-        "node.wallet.storage.wallet_file",
+        "node.wallet.simple_wallet",
     ]
 
     icon = assets_dir / "berzcoin.ico"

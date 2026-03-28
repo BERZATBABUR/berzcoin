@@ -28,6 +28,8 @@ class Database:
             self.connection.row_factory = sqlite3.Row
             self.connection.execute("PRAGMA foreign_keys = ON")
             self.connection.execute("PRAGMA journal_mode = WAL")
+            # Favor crash-consistency over write throughput for node-state safety.
+            self.connection.execute("PRAGMA synchronous = FULL")
             self.connection.execute("PRAGMA busy_timeout = 5000")
             logger.info(f"Connected to database: {self.db_path}")
         except Exception as e:
@@ -103,6 +105,25 @@ class Database:
         if not self.db_path.exists():
             return 0
         return self.db_path.stat().st_size
+
+    def check_consistency(self, quick: bool = True) -> Dict[str, Any]:
+        """Run SQLite consistency checks suitable for health/recovery verification."""
+        pragma = "quick_check" if quick else "integrity_check"
+        integrity_rows = self.fetch_all(f"PRAGMA {pragma}")
+        fk_rows = self.fetch_all("PRAGMA foreign_key_check")
+
+        integrity_ok = len(integrity_rows) == 1 and str(integrity_rows[0].get(pragma, "ok")).lower() == "ok"
+        if not integrity_ok and len(integrity_rows) == 1:
+            # sqlite can return result key as "integrity_check" even for quick_check in some builds.
+            integrity_ok = str(integrity_rows[0].get("integrity_check", "")).lower() == "ok"
+
+        return {
+            "integrity_ok": integrity_ok,
+            "integrity_rows": integrity_rows,
+            "foreign_keys_ok": len(fk_rows) == 0,
+            "foreign_key_violations": fk_rows,
+            "mode": pragma,
+        }
     
     def __enter__(self):
         self.connect()

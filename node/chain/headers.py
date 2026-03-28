@@ -39,7 +39,15 @@ class HeaderChain:
     def get_header(self, height: int) -> Optional[BlockHeader]:
         if height in self._header_cache:
             return self._header_cache[height]
-        result = self.db.fetch_one("SELECT * FROM block_headers WHERE height = ?", (height,))
+        result = self.db.fetch_one(
+            """
+            SELECT * FROM block_headers
+            WHERE height = ?
+            ORDER BY CAST(chainwork AS INTEGER) DESC
+            LIMIT 1
+            """,
+            (height,),
+        )
         if not result:
             return None
         header = BlockHeader(
@@ -89,39 +97,24 @@ class HeaderChain:
         return self.get_header(height) if height >= 0 else None
     
     def get_headers_range(self, start_height: int, count: int) -> List[BlockHeader]:
-        results = self.db.fetch_all(
-            "SELECT * FROM block_headers WHERE height >= ? AND height < ? ORDER BY height",
-            (start_height, start_height + count)
-        )
         headers = []
-        for result in results:
-            headers.append(BlockHeader(
-                version=result['version'],
-                prev_block_hash=bytes.fromhex(result['prev_block_hash']),
-                merkle_root=bytes.fromhex(result['merkle_root']),
-                timestamp=result['timestamp'],
-                bits=result['bits'],
-                nonce=result['nonce']
-            ))
+        for height in range(start_height, start_height + count):
+            header = self.get_header(height)
+            if not header:
+                continue
+            headers.append(header)
         return headers
     
     def get_last_headers(self, count: int) -> List[BlockHeader]:
-        results = self.db.fetch_all("""
-            SELECT * FROM block_headers 
-            WHERE is_valid = 1 
-            ORDER BY height DESC 
-            LIMIT ?
-        """, (count,))
         headers = []
-        for result in reversed(results):
-            headers.append(BlockHeader(
-                version=result['version'],
-                prev_block_hash=bytes.fromhex(result['prev_block_hash']),
-                merkle_root=bytes.fromhex(result['merkle_root']),
-                timestamp=result['timestamp'],
-                bits=result['bits'],
-                nonce=result['nonce']
-            ))
+        best_height = self.get_best_height()
+        if best_height < 0:
+            return headers
+        start = max(0, best_height - count + 1)
+        for h in range(start, best_height + 1):
+            header = self.get_header(h)
+            if header:
+                headers.append(header)
         return headers
     
     def find_fork_point(self, headers: List[BlockHeader]) -> Optional[int]:
@@ -142,7 +135,15 @@ class HeaderChain:
         return self.header_exists(header.prev_block_hash.hex())
     
     def get_chainwork(self, height: int) -> int:
-        result = self.db.fetch_one("SELECT chainwork FROM block_headers WHERE height = ?", (height,))
+        result = self.db.fetch_one(
+            """
+            SELECT chainwork FROM block_headers
+            WHERE height = ?
+            ORDER BY CAST(chainwork AS INTEGER) DESC
+            LIMIT 1
+            """,
+            (height,),
+        )
         return int(result['chainwork']) if result else 0
     
     def clear_cache(self) -> None:

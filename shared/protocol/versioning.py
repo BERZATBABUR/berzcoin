@@ -26,8 +26,8 @@ class VersionHandshake:
         self.verack_sent = False
         self.verack_received = False
 
-    def create_version(self, remote_ip: bytes = b'' * 16, remote_port: int = 8333,
-                       local_ip: bytes = b'' * 16, local_port: int = 8333) -> VersionMessage:
+    def create_version(self, remote_ip: bytes = b"\x00" * 16, remote_port: int = 8333,
+                       local_ip: bytes = b"\x00" * 16, local_port: int = 8333) -> VersionMessage:
         return VersionMessage(
             version=self.PROTOCOL_VERSION,
             services=self.local_services,

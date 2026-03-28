@@ -25,12 +25,13 @@ jobs:
           pip install bandit pip-audit
 
       - name: Run bandit
-        run: bandit -r node/ shared/ cli/ -f json -o bandit-report.json || true
+        run: bandit -r node/ shared/ cli/ -f json -o bandit-report.json
 
       - name: Run pip-audit
-        run: pip-audit -r requirements.txt 2>&1 | tee pip-audit-report.txt || true
+        run: pip-audit -r requirements.txt 2>&1 | tee pip-audit-report.txt
 
       - name: Upload reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: security-reports

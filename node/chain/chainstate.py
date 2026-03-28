@@ -35,13 +35,23 @@ class ChainState:
         self.header_chain = HeaderChain(db, self.blocks_store)
         self.block_index = BlockIndex(db)
         self.chainwork = ChainWork(params)
-        self.rules = ConsensusRules(params)
+        self.rules = ConsensusRules(params, output_value_lookup=self._lookup_output_value)
         self.pow = ProofOfWork(params)
+        self._block_validator = None
         
-        self._best_block_hash: Optional[str] = None
+        self._best_hash: Optional[str] = None
         self._best_height: int = -1
         self._best_chainwork: int = 0
         self._wallet_callback = None
+
+    def _lookup_output_value(self, txid: str, index: int) -> Optional[int]:
+        result = self.db.fetch_one(
+            'SELECT value FROM outputs WHERE txid = ? AND "index" = ?',
+            (txid, int(index)),
+        )
+        if not result or result.get("value") is None:
+            return None
+        return int(result["value"])
     
     def initialize(self) -> None:
         self.block_index.load()
@@ -140,7 +150,7 @@ class ChainState:
         self._best_hash = block_hash
         self._best_height = height
         self._best_chainwork = chainwork
-        self.block_index.mark_main_chain(block_hash, True)
+        self.block_index.set_best_chain_tip(block_hash)
         logger.info(f"New best block: {block_hash[:16]} at height {height}")
         
         # Notify wallet of new block
@@ -157,17 +167,20 @@ class ChainState:
     def get_block(self, block_hash: str) -> Optional[Block]:
         entry = self.block_index.get_block(block_hash)
         if entry:
-            return self.blocks_store.read_block(entry.height)
+            return self.blocks_store.read_block_by_hash(entry.block_hash)
         return None
     
     def get_block_by_height(self, height: int) -> Optional[Block]:
         entry = self.block_index.get_block_by_height(height)
         if entry:
-            return self.blocks_store.read_block(height)
+            return self.blocks_store.read_block_by_hash(entry.block_hash)
         return None
     
     def get_header(self, height: int) -> Optional[BlockHeader]:
-        return self.header_chain.get_header(height)
+        entry = self.block_index.get_block_by_height(height)
+        if not entry:
+            return None
+        return self.header_chain.get_header_by_hash(entry.block_hash)
     
     def get_header_by_hash(self, block_hash: str) -> Optional[BlockHeader]:
         return self.header_chain.get_header_by_hash(block_hash)
@@ -231,6 +244,13 @@ class ChainState:
     
     def is_fully_validated(self) -> bool:
         return self._best_height >= 0
+
+    def validate_block_stateful(self, block: Block, height: int) -> bool:
+        """Validate a block against current chainstate/UTXO state."""
+        if self._block_validator is None:
+            from .validation import BlockValidator
+            self._block_validator = BlockValidator(self.params, self.utxo_store, self.block_index)
+        return self._block_validator.validate_block(block, height)
     
     def get_stats(self) -> Dict[str, Any]:
         return {

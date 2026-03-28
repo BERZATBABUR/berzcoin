@@ -3,6 +3,7 @@
 from typing import Any, Dict, List, Union
 
 from shared.consensus.pow import ProofOfWork
+from node.wallet.core.tx_builder import TransactionBuilder
 
 
 class MiningControlHandlers:
@@ -12,7 +13,7 @@ class MiningControlHandlers:
         self.node = node
 
     async def set_generate(self, generate: bool, threads: int = 1) -> Dict[str, Any]:
-        """Start or stop background mining (regtest). Starting requires wallet unlock and mining address."""
+        """Start or stop background mining (regtest)."""
         if self.node.config.get("network") != "regtest":
             return {"error": "Mining only available on regtest"}
 
@@ -20,13 +21,22 @@ class MiningControlHandlers:
             return {"error": "Miner not initialized"}
 
         if generate:
-            wallet = getattr(self.node, "wallet", None)
-            if wallet and wallet.locked:
-                return {"error": "Wallet must be unlocked for mining"}
-
             mining_addr = (self.node.config.get("miningaddress") or "").strip()
             if not mining_addr:
-                return {"error": "Mining address not set"}
+                mining_addr = (self.node.miner.mining_address or "").strip()
+            if not mining_addr:
+                manager = getattr(self.node, "simple_wallet_manager", None)
+                active_wallet = manager.get_active_wallet() if manager else None
+                if active_wallet:
+                    mining_addr = active_wallet.address
+            if not mining_addr:
+                return {"error": "Set mining address first (or activate wallet)"}
+            try:
+                TransactionBuilder(self.node.config.get("network", "mainnet"))._create_script_pubkey(mining_addr)
+            except Exception:
+                return {"error": "Invalid mining address"}
+            self.node.config.set("miningaddress", mining_addr)
+            self.node.miner.mining_address = mining_addr
 
             if self.node.miner.is_mining:
                 return {"status": "already_mining"}
@@ -80,16 +90,24 @@ class MiningControlHandlers:
         }
 
     async def set_mining_address(self, address: str) -> Dict[str, Any]:
-        """Set mining reward address (runtime + config)."""
+        """Set mining reward address."""
         if not self.node.miner:
             return {"error": "Miner not initialized"}
+        address = (address or "").strip()
+        if not address:
+            return {"error": "Address required"}
+        try:
+            TransactionBuilder(self.node.config.get("network", "mainnet"))._create_script_pubkey(address)
+        except Exception:
+            return {"error": "Invalid mining address"}
 
         old_address = self.node.miner.mining_address
         self.node.miner.mining_address = address
         self.node.config.set("miningaddress", address)
 
-        if self.node.miner.block_assembler:
-            self.node.miner.block_assembler.coinbase_address = address
+        block_assembler = getattr(self.node.miner, "block_assembler", None)
+        if block_assembler is not None:
+            block_assembler.coinbase_address = address
 
         return {
             "status": "updated",
@@ -105,36 +123,13 @@ class MiningControlHandlers:
     async def get_mining_workers(
         self,
     ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
-        """List Stratum workers, or an error dict if Stratum is not running."""
-        if not getattr(self.node, "stratum_server", None):
-            return {"error": "Stratum server not running"}
-
-        workers: List[Dict[str, Any]] = []
-        for miner in self.node.stratum_server.miners.values():
-            workers.append(
-                {
-                    "id": miner.id,
-                    "worker_name": miner.worker_name,
-                    "difficulty": miner.difficulty,
-                    "shares": miner.shares,
-                    "accepted": miner.accepted_shares,
-                    "rejected": miner.rejected_shares,
-                    "last_share": miner.last_share_time,
-                }
-            )
-        return workers
+        """Stratum worker API is intentionally disabled in this release."""
+        return {"error": "Stratum API disabled in this release"}
 
     async def set_mining_difficulty(self, difficulty: float) -> Dict[str, Any]:
-        """Set Stratum share difficulty and notify workers."""
-        if not getattr(self.node, "stratum_server", None):
-            return {"error": "Stratum server not running"}
-
-        self.node.stratum_server.share_difficulty = difficulty
-
-        for miner in self.node.stratum_server.miners.values():
-            await self.node.stratum_server._send_difficulty(miner, difficulty)
-
-        return {"status": "updated", "difficulty": difficulty}
+        """Stratum share difficulty control is intentionally disabled."""
+        _ = difficulty
+        return {"error": "Stratum API disabled in this release"}
 
     def _get_difficulty(self, bits: int) -> float:
         pow_check = ProofOfWork(self.node.chainstate.params)

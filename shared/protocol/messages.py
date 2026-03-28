@@ -166,6 +166,20 @@ class GetBlocksMessage:
         result += self.hash_stop
         return result
 
+    @classmethod
+    def deserialize(cls, data: bytes, offset: int = 0) -> Tuple['GetBlocksMessage', int]:
+        """Deserialize getblocks message."""
+        version, offset = Serializer.read_uint32(data, offset)
+        count, offset = Serializer.read_varint(data, offset)
+
+        locator = []
+        for _ in range(count):
+            hash_bytes, offset = Serializer.read_bytes(data, offset, 32)
+            locator.append(hash_bytes)
+
+        hash_stop, offset = Serializer.read_bytes(data, offset, 32)
+        return cls(version=version, block_locator_hashes=locator, hash_stop=hash_stop), offset
+
 @dataclass
 class InvMessage:
     """Inventory message."""
@@ -333,3 +347,77 @@ class RejectMessage:
         reason, offset = Serializer.read_string(data, offset)
         data_remaining = data[offset:]
         return cls(message, code, reason, data_remaining), len(data)
+
+
+@dataclass
+class SendCmpctMessage:
+    """BIP152 sendcmpct negotiation message."""
+    announce: bool = False
+    version: int = 1
+
+    def serialize(self) -> bytes:
+        result = Serializer.write_uint8(1 if self.announce else 0)
+        result += Serializer.write_uint64(self.version)
+        return result
+
+    @classmethod
+    def deserialize(cls, data: bytes, offset: int = 0) -> Tuple['SendCmpctMessage', int]:
+        announce, offset = Serializer.read_uint8(data, offset)
+        version, offset = Serializer.read_uint64(data, offset)
+        return cls(announce=bool(announce), version=version), offset
+
+
+@dataclass
+class CmpctBlockMessage:
+    """Compact block relay payload (minimal BIP152-compatible envelope)."""
+    header: bytes = b""
+    nonce: int = 0
+    shortids: List[int] = field(default_factory=list)
+    prefilled_txn: List[Tuple[int, bytes]] = field(default_factory=list)
+
+    def serialize(self) -> bytes:
+        if len(self.header) != 80:
+            raise ValueError("Compact block header must be 80 bytes")
+        result = self.header
+        result += Serializer.write_uint64(self.nonce)
+        result += Serializer.write_varint(len(self.shortids))
+        for shortid in self.shortids:
+            if shortid < 0 or shortid > 0xFFFFFFFFFFFF:
+                raise ValueError("shortid out of 48-bit range")
+            result += int(shortid).to_bytes(6, "little")
+        result += Serializer.write_varint(len(self.prefilled_txn))
+        for index, tx_bytes in self.prefilled_txn:
+            result += Serializer.write_varint(int(index))
+            result += Serializer.write_bytes(tx_bytes)
+        return result
+
+    @classmethod
+    def deserialize(cls, data: bytes, offset: int = 0) -> Tuple['CmpctBlockMessage', int]:
+        header, offset = Serializer.read_bytes(data, offset, 80)
+        nonce, offset = Serializer.read_uint64(data, offset)
+        shortid_count, offset = Serializer.read_varint(data, offset)
+        shortids: List[int] = []
+        for _ in range(shortid_count):
+            shortid_bytes, offset = Serializer.read_bytes(data, offset, 6)
+            shortids.append(int.from_bytes(shortid_bytes, "little"))
+        prefilled_count, offset = Serializer.read_varint(data, offset)
+        prefilled_txn: List[Tuple[int, bytes]] = []
+        for _ in range(prefilled_count):
+            index, offset = Serializer.read_varint(data, offset)
+            tx_len, offset = Serializer.read_varint(data, offset)
+            tx_bytes, offset = Serializer.read_bytes(data, offset, tx_len)
+            prefilled_txn.append((index, tx_bytes))
+        return cls(header=header, nonce=nonce, shortids=shortids, prefilled_txn=prefilled_txn), offset
+
+    def block_hash(self) -> bytes:
+        return hash256(self.header)
+
+    @classmethod
+    def from_block(cls, block: "Any", nonce: int = 0) -> "CmpctBlockMessage":
+        """Construct a minimal compact block envelope from a full block."""
+        return cls(
+            header=block.header.serialize(),
+            nonce=nonce,
+            shortids=[],
+            prefilled_txn=[],
+        )

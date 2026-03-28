@@ -2,6 +2,13 @@
 
 BerzCoin full node, wallet CLI, and shared libraries (Python).
 
+## Scope (v0.1)
+
+- Canonical private-key wallet model only
+- Validation-first full node
+- Minimal RPC/CLI/dashboard surface
+- Lightwallet and Stratum components are removed from this scope
+
 ## Quick start
 
 ```bash
@@ -17,6 +24,26 @@ Or install in editable mode: `pip install -e ".[dev]"` then run `berzcoind -data
 pip install -e ".[dev]"
 pytest tests/unit tests/integration -v
 ```
+
+Optional Bitcoin Core differential checks (external dependencies required):
+
+```bash
+scripts/core_diff_preflight.sh
+BERZ_ENABLE_CORE_DIFF=1 BERZ_REQUIRE_CORE_DIFF=1 pytest -q tests/integration/test_bitcoin_core_differential.py -rs
+```
+
+## Release Artifacts
+
+- Python sdist/wheel:
+  - `python -m build`
+- Linux packages (`.deb`, `.rpm`, requires `fpm` + `rpmbuild`):
+  - `scripts/build_linux_packages.sh`
+- Sanity check to prevent placeholder package files in git:
+  - `scripts/check_no_placeholder_artifacts.sh`
+- v1 release smoke check:
+  - `scripts/v1_release_smoke.sh`
+- Release notes:
+  - `CHANGELOG.md`
 
 ## Usage examples (CLI)
 
@@ -36,63 +63,51 @@ berzcoin-cli getminingstatus
 
 # Mining reward address
 berzcoin-cli setminingaddress "bcrt1q..."
-
-# Stratum workers (requires Stratum server on the node)
-berzcoin-cli getminingworkers
-
-# Stratum share difficulty
-berzcoin-cli setminingdifficulty 0.5
 ```
 
 ### Wallet control
 
 ```bash
-# Create wallet (optional name; default name is default)
+# Create wallet (name argument kept for CLI compatibility)
 berzcoin-cli createwallet mywallet
-berzcoin-cli createwallet --password "secret"
 
-# Load wallet file from datadir/wallets/
-berzcoin-cli loadwallet mywallet.dat --password "secret"
+# Activate an existing wallet from private key
+berzcoin-cli loadwallet "<private_key_hex>"
+berzcoin-cli activatewallet "<private_key_hex>"
 
-# List loaded wallet name(s)
+# List known wallet addresses from datadir/wallets/
 berzcoin-cli listwallets
-
-# Backup (optional directory for backup files)
-berzcoin-cli backupwallet --destination /backup/
-
-# List backups
-berzcoin-cli listbackups
-
-# Restore from backup name (see listbackups)
-berzcoin-cli restorewallet wallet_20240101
-
-# Summary
-berzcoin-cli getwalletsummary
-
-# Addresses (--no-include-used to hide used)
-berzcoin-cli getwalletaddresses
-
-# UTXOs (--address / --minconf filters)
-berzcoin-cli getwalletutxos
-
-# Transactions
-berzcoin-cli getwallettransactions --count 50
-
-# Label
-berzcoin-cli setwalletlabel "bcrt1q..." "Savings"
-
-# Account
-berzcoin-cli createaccount "Trading"
-
-berzcoin-cli lockwallet
-berzcoin-cli unlockwallet "password" --timeout 3600
-
-berzcoin-cli getwalletaccounts
 ```
 
 ### Web dashboard (optional)
 
 Enable in config: `webdashboard=true`, `webhost=127.0.0.1`, `webport=8080`, then open `http://127.0.0.1:8080/`.
+
+For local demos:
+
+```bash
+scripts/dashboard_demo.sh --help
+scripts/dashboard_demo.sh --reset-datadir   # optional, destructive
+```
+
+One-command v1 launcher (background):
+
+```bash
+scripts/run_v1_interface.sh
+```
+
+This starts node + dashboard only (neutral mode) and verifies `http://127.0.0.1:<webport>/` is reachable.
+By default, v1 launcher resets the datadir so the chain starts fresh each run.
+No wallet is auto-activated and no mining address is preloaded; activate with your private key from the Wallet page.
+Use `--no-reset-datadir` to keep existing chain state.
+
+Optional demo bootstrap (auto wallet+mining):
+
+```bash
+scripts/run_v1_interface.sh --bootstrap-demo
+```
+
+When default ports are busy, the script auto-selects free ports and writes them to `~/.berzcoin_v1/run_info.env`.
 
 ### Quick start: dashboard + wallet + regtest mining
 
@@ -110,9 +125,9 @@ webdashboard = true
 webhost = 127.0.0.1
 webport = 8080
 
-# Wallet (required for dashboard wallet / send unless you use disablewallet = true)
+# Wallet (private-key activation model)
 wallet = default
-walletpassphrase = your_secure_passphrase_here
+wallet_private_key =
 
 # Regtest CPU mining — set miningaddress to a real regtest address before enabling autostart
 mining = true
@@ -122,10 +137,9 @@ autominer = true
 
 Notes:
 
-- The correct key is **`walletpassphrase`**, not `walletpassword`.
-- **`miningaddress`** must be a valid regtest address. If the wallet is new, start once with `mining = false` and `autominer = false`, then run `berzcoin-cli unlockwallet ...`, `berzcoin-cli getnewaddress`, `berzcoin-cli setminingaddress "<address>"`, set `miningaddress` in the conf (or rely on RPC), and set `mining` / `autominer` as needed; restart if you only changed the file.
+- **`miningaddress`** must be a valid regtest address. If the wallet is new, start once with `mining = false` and `autominer = false`, then run `berzcoin-cli activatewallet "<private_key_hex>"`, `berzcoin-cli getnewaddress`, `berzcoin-cli setminingaddress "<address>"`, set `miningaddress` in the conf (or rely on RPC), and set `mining` / `autominer` as needed; restart if you only changed the file.
 - Dashboard **Start/Stop mining** buttons are **regtest-only**; use `network = regtest` or start with **`berzcoind --regtest -conf ~/.berzcoin/berzcoin.conf`**.
-- Mining autostart needs an unlocked wallet when the address is tied to wallet policy; unlock via **`berzcoin-cli unlockwallet`** if the miner refuses to start.
+- Mining autostart needs an active wallet identity; activate via **`berzcoin-cli activatewallet "<private_key_hex>"`** if the miner refuses to start.
 
 Start the node:
 
@@ -138,6 +152,36 @@ berzcoind --regtest -conf ~/.berzcoin/berzcoin.conf
 Then open **http://127.0.0.1:8080/**.
 
 More detail: [docs/QUICK_START.md](docs/QUICK_START.md).
+
+Release-readiness checklist + fresh-environment run guide:
+[docs/V1_SHARING_AND_RUN.md](docs/V1_SHARING_AND_RUN.md).
+
+## Ops and production readiness
+
+- Health/readiness/metrics endpoints:
+  - `GET /health`
+  - `GET /ready`
+  - `GET /metrics`
+  - `GET /metrics/prometheus`
+- Alert rules: `ops/prometheus/alerts.yml`
+- Grafana starter dashboard: `ops/grafana/berzcoin-node-dashboard.json`
+- Runbooks:
+  - `docs/RUNBOOK_DEPLOY.md`
+  - `docs/RUNBOOK_UPGRADE.md`
+  - `docs/RUNBOOK_INCIDENTS.md`
+
+Useful tuning keys in `berzcoin.conf`:
+- `sync_getdata_batch_size`
+- `sync_poll_interval_secs`
+- `sync_block_request_timeout_secs`
+- `sync_error_backoff_secs`
+- `blocks_cache_size`
+
+Optional trust-chain admission (P2P):
+- `authority_chain_enabled = true`
+- `authority_trusted_nodes = 203.0.113.10,198.51.100.7`
+
+When enabled, trusted/verified nodes can verify newly joining nodes, and newly verified nodes become verifiers for the next joins.
 
 ## License
 

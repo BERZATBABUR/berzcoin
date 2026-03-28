@@ -85,8 +85,20 @@ Stop via RPC when the node is running: `berzcoin-cli stop` (with correct `-datad
 - Logs: `debug.log` under datadir when configured
 - RPC: `get_blockchain_info`, `get_mempool_info`, wallet methods (if wallet enabled)
 - CLI: `berzcoin-cli getmempoolinfo`, `getblockchaininfo`, etc. (use **`-datadir`** and **`-rpcport`** matching the node)
+- HTTP endpoints:
+  - `GET /health`
+  - `GET /ready`
+  - `GET /metrics`
+  - `GET /metrics/prometheus`
 
-There is **no built-in Prometheus exporter** in core; add one externally if needed.
+Alert and dashboard starter artifacts:
+
+- Prometheus alerts: `ops/prometheus/alerts.yml`
+- Grafana dashboard: `ops/grafana/berzcoin-node-dashboard.json`
+- Runbooks:
+  - `docs/RUNBOOK_DEPLOY.md`
+  - `docs/RUNBOOK_UPGRADE.md`
+  - `docs/RUNBOOK_INCIDENTS.md`
 
 ## Troubleshooting
 

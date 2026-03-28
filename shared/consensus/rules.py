@@ -1,6 +1,6 @@
 """Core consensus rules for BerzCoin."""
 
-from typing import List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 from datetime import datetime
 from ..core.block import Block, BlockHeader
 from ..core.transaction import Transaction
@@ -10,8 +10,15 @@ from .params import ConsensusParams
 class ConsensusRules:
     """Consensus validation rules."""
     
-    def __init__(self, params: ConsensusParams):
+    def __init__(
+        self,
+        params: ConsensusParams,
+        output_value_lookup: Optional[Callable[[str, int], Optional[int]]] = None,
+    ):
         self.params = params
+        # Optional callback: resolve (txid, vout) -> output value.
+        # When set, subsidy validation can account for transaction fees.
+        self.output_value_lookup = output_value_lookup
     
     def validate_block_header(self, header: BlockHeader, prev_header: Optional[BlockHeader] = None) -> bool:
         if header.version < 1 or header.version > 0x20000000:
@@ -29,6 +36,8 @@ class ConsensusRules:
                        height: int = 0) -> bool:
         prev_header = prev_block.header if prev_block else None
         self.validate_block_header(block.header, prev_header)
+        if len(block.transactions) == 0:
+            raise ValueError("Block must include at least one transaction")
 
         if len(block.serialize(include_witness=False)) > self.params.max_block_size:
             raise ValueError("Block size exceeds limit")
@@ -40,6 +49,9 @@ class ConsensusRules:
         coinbase = block.transactions[0]
         if not coinbase.is_coinbase():
             raise ValueError("First transaction must be coinbase")
+        for tx in block.transactions[1:]:
+            if tx.is_coinbase():
+                raise ValueError("Only first transaction may be coinbase")
 
         if height >= self.params.bip34_height:
             self.validate_coinbase_height(coinbase, height)
@@ -67,7 +79,8 @@ class ConsensusRules:
                 raise ValueError(f"Negative output value: {txout.value}")
             total_out += txout.value
 
-        if total_out > 21000000 * 100000000:
+        max_money = int(getattr(self.params, "max_money", 21_000_000 * 100_000_000))
+        if total_out > max_money:
             raise ValueError("Total output exceeds max supply")
 
         if tx.is_coinbase():
@@ -113,12 +126,50 @@ class ConsensusRules:
         expected_subsidy = get_block_subsidy(height, self.params)
         coinbase = block.transactions[0]
         actual_subsidy = sum(txout.value for txout in coinbase.vout)
-        if actual_subsidy > expected_subsidy + self.get_total_fees(block):
+        total_fees = self.get_total_fees(block)
+        if total_fees < 0:
+            return False
+        if actual_subsidy > expected_subsidy + total_fees:
             return False
         return True
 
     def get_total_fees(self, block: Block) -> int:
+        # Resolve in-block dependency spends first (parent tx already processed in
+        # this block), then fallback to chain/output lookup callback.
         total_fees = 0
+        in_block_outputs: Dict[Tuple[str, int], int] = {}
+
+        for tx in block.transactions[1:]:
+            input_total = 0
+            for txin in tx.vin:
+                prev_txid = txin.prev_tx_hash.hex()
+                prev_index = int(txin.prev_tx_index)
+                key = (prev_txid, prev_index)
+
+                if key in in_block_outputs:
+                    value = in_block_outputs[key]
+                elif self.output_value_lookup is not None:
+                    resolved = self.output_value_lookup(prev_txid, prev_index)
+                    if resolved is None:
+                        return -1
+                    value = int(resolved)
+                else:
+                    return -1
+
+                if value < 0:
+                    return -1
+                input_total += value
+
+            output_total = sum(int(txout.value) for txout in tx.vout)
+            fee = input_total - output_total
+            if fee < 0:
+                return -1
+            total_fees += fee
+
+            txid = tx.txid().hex()
+            for idx, txout in enumerate(tx.vout):
+                in_block_outputs[(txid, idx)] = int(txout.value)
+
         return total_fees
 
     def get_target(self, bits: int) -> int:

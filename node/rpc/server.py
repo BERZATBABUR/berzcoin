@@ -7,6 +7,7 @@ import time
 import traceback
 import os
 import ssl
+import inspect
 from typing import TYPE_CHECKING, Any, Dict, Optional, Callable, Awaitable, Union
 
 from aiohttp import web
@@ -59,6 +60,10 @@ class RPCServer:
         self.handlers: Dict[str, HandlerType] = {}
         self.app: Optional[web.Application] = None
         self.runner: Optional[web.AppRunner] = None
+        self.health_provider: Optional[Callable[[], Union[Dict[str, Any], Awaitable[Dict[str, Any]]]]] = None
+        self.readiness_provider: Optional[Callable[[], Union[Dict[str, Any], Awaitable[Dict[str, Any]]]]] = None
+        self.metrics_provider: Optional[Callable[[], Union[Dict[str, Any], Awaitable[Dict[str, Any]]]]] = None
+        self.prometheus_provider: Optional[Callable[[], Union[str, Awaitable[str]]]] = None
 
     def register_handler(self, method: str, handler: HandlerType) -> None:
         """Register RPC method handler."""
@@ -70,11 +75,26 @@ class RPCServer:
         for method, handler in handlers.items():
             self.register_handler(method, handler)
 
+    def register_status_providers(
+        self,
+        health_provider: Optional[Callable[[], Union[Dict[str, Any], Awaitable[Dict[str, Any]]]]] = None,
+        readiness_provider: Optional[Callable[[], Union[Dict[str, Any], Awaitable[Dict[str, Any]]]]] = None,
+        metrics_provider: Optional[Callable[[], Union[Dict[str, Any], Awaitable[Dict[str, Any]]]]] = None,
+        prometheus_provider: Optional[Callable[[], Union[str, Awaitable[str]]]] = None,
+    ) -> None:
+        self.health_provider = health_provider
+        self.readiness_provider = readiness_provider
+        self.metrics_provider = metrics_provider
+        self.prometheus_provider = prometheus_provider
+
     async def start(self) -> None:
         """Start RPC server."""
         self.app = web.Application()
         self.app.router.add_post('/', self._handle_request)
         self.app.router.add_get('/health', self._handle_health)
+        self.app.router.add_get('/ready', self._handle_ready)
+        self.app.router.add_get('/metrics', self._handle_metrics)
+        self.app.router.add_get('/metrics/prometheus', self._handle_metrics_prometheus)
 
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
@@ -216,13 +236,63 @@ class RPCServer:
                 {'error': {'code': -32000, 'message': 'Connection refused'}},
                 status=403,
             )
-        return web.json_response(
-            {
-                "status": "ok",
-                "version": RPC_SERVER_VERSION,
-                "timestamp": int(time.time()),
-            }
-        )
+        payload: Dict[str, Any] = {
+            "status": "ok",
+            "version": RPC_SERVER_VERSION,
+            "timestamp": int(time.time()),
+        }
+        if self.health_provider is not None:
+            details = self.health_provider()
+            if inspect.isawaitable(details):
+                details = await details
+            payload["details"] = details
+        return web.json_response(payload)
+
+    async def _handle_ready(self, request: web.Request) -> web.Response:
+        if self.config is not None and not self._rpc_ip_allowed(request):
+            client_ip = self._client_ip(request)
+            logger.warning("RPC readiness denied from %s", client_ip)
+            return web.json_response(
+                {'error': {'code': -32000, 'message': 'Connection refused'}},
+                status=403,
+            )
+        ready = {"ready": True}
+        if self.readiness_provider is not None:
+            ready = self.readiness_provider()
+            if inspect.isawaitable(ready):
+                ready = await ready
+        status = 200 if bool(ready.get("ready", False)) else 503
+        return web.json_response(ready, status=status)
+
+    async def _handle_metrics(self, request: web.Request) -> web.Response:
+        if self.config is not None and not self._rpc_ip_allowed(request):
+            client_ip = self._client_ip(request)
+            logger.warning("RPC metrics denied from %s", client_ip)
+            return web.json_response(
+                {'error': {'code': -32000, 'message': 'Connection refused'}},
+                status=403,
+            )
+        if self.metrics_provider is None:
+            return web.json_response({"error": "metrics provider unavailable"}, status=503)
+        payload = self.metrics_provider()
+        if inspect.isawaitable(payload):
+            payload = await payload
+        return web.json_response(payload)
+
+    async def _handle_metrics_prometheus(self, request: web.Request) -> web.Response:
+        if self.config is not None and not self._rpc_ip_allowed(request):
+            client_ip = self._client_ip(request)
+            logger.warning("RPC prometheus metrics denied from %s", client_ip)
+            return web.json_response(
+                {'error': {'code': -32000, 'message': 'Connection refused'}},
+                status=403,
+            )
+        if self.prometheus_provider is None:
+            return web.Response(text="# metrics unavailable\n", content_type="text/plain", status=503)
+        body = self.prometheus_provider()
+        if inspect.isawaitable(body):
+            body = await body
+        return web.Response(text=str(body), content_type="text/plain")
 
     def _authenticate(self, auth_header: Optional[str]) -> bool:
         """Authenticate HTTP Basic against cookie or user db."""

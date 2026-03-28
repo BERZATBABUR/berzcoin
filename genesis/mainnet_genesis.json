@@ -1,5 +1,12 @@
 {
-  "_comment": "Placeholder. Mainnet consensus genesis lives in shared/consensus/params.py (ConsensusParams.mainnet). Use this file for operator-documented or future file-based genesis import.",
+  "_comment": "BerzCoin mainnet genesis metadata (must match shared/consensus/params.py).",
   "network": "mainnet",
-  "refer_to_code": "shared.consensus.params.ConsensusParams.mainnet"
+  "version": 1,
+  "prev_block_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "merkle_root": "2ed9e25352bd4cdbd52a7d5afc3b780f9dd5b2dd3425c66d8b8f1c45e72d74e2",
+  "timestamp": 1774569600,
+  "bits": "0x207fffff",
+  "nonce": 24409,
+  "hash": "0000a2b00a878937fe2431db054cc73784721f63ee8bacffe1e0aa0612f01f25",
+  "message_magic_hex": "b7d9c4ef"
 }

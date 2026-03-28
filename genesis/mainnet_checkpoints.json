@@ -1,4 +1,10 @@
 {
-  "checkpoints": [],
-  "_comment": "Add entries like {\"height\": 100000, \"block_hash\": \"hex...\", \"timestamp\": 123} when you publish mainnet checkpoints."
+  "_comment": "BerzCoin mainnet checkpoints. Add more finalized heights as mainnet grows.",
+  "checkpoints": [
+    {
+      "height": 0,
+      "block_hash": "0000a2b00a878937fe2431db054cc73784721f63ee8bacffe1e0aa0612f01f25",
+      "timestamp": 1774569600
+    }
+  ]
 }

@@ -3,6 +3,8 @@
 from typing import Dict, List, Optional
 from enum import IntEnum
 
+from .params import ConsensusParams
+
 class DeploymentState(IntEnum):
     """Deployment state for version bits."""
     DEFINED = 0
@@ -75,25 +77,8 @@ class VersionBitsTracker:
                 mask |= (1 << deployment.bit)
         return mask
 
-def get_standard_deployments() -> List[VersionBitsDeployment]:
-    """Get standard version bits deployments."""
-    return [
-        VersionBitsDeployment(
-            name="testdummy",
-            bit=28,
-            start_time=1199145601,
-            timeout=1230767999
-        ),
-        VersionBitsDeployment(
-            name="csv",
-            bit=0,
-            start_time=1462060800,
-            timeout=1493596800
-        ),
-        VersionBitsDeployment(
-            name="segwit",
-            bit=1,
-            start_time=1479168000,
-            timeout=1510704000
-        )
-    ]
+def get_standard_deployments(params: Optional[ConsensusParams] = None) -> List[VersionBitsDeployment]:
+    """Get standard version bits deployments for the active network profile."""
+    from .deployments import get_versionbits_deployments
+
+    return get_versionbits_deployments(params=params)

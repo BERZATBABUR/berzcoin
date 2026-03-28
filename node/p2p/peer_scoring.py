@@ -58,6 +58,10 @@ class PeerScore:
         
         return True
 
+    def should_evict(self) -> bool:
+        """Whether this peer is an eviction candidate."""
+        return self.is_banned() or self.score <= -40 or self.failures >= 12
+
 
 class PeerScoringManager:
     """Manage peer reputation scores."""
@@ -69,6 +73,18 @@ class PeerScoringManager:
             'good': 50,
             'bad': -20,
             'ban': -50
+        }
+        self.reason_penalties = {
+            "connect_failed": -5,
+            "handshake_failed": -10,
+            "oversized_payload": -25,
+            "protocol_violation": -20,
+            "evicted_for_inbound_slot": -8,
+            "invalid_block": -35,
+            "invalid_transaction": -15,
+            "relay_spam": -10,
+            "addr_spam": -12,
+            "stale_peer": -6,
         }
     
     def get_score(self, address: str) -> PeerScore:
@@ -89,6 +105,7 @@ class PeerScoringManager:
         """Record bad behavior."""
         score = self.get_score(address)
         score.record_failure(reason)
+        score.add_score(int(self.reason_penalties.get(reason, 0)))
         
         # Auto-ban if score too low
         if score.score <= self.thresholds['ban']:
@@ -97,15 +114,14 @@ class PeerScoringManager:
     
     def record_invalid_block(self, address: str):
         """Record invalid block from peer."""
-        score = self.get_score(address)
-        score.add_score(-20)
-        self.record_bad(address, "invalid block")
+        self.record_bad(address, "invalid_block")
     
     def record_invalid_tx(self, address: str):
         """Record invalid transaction from peer."""
-        score = self.get_score(address)
-        score.add_score(-10)
-        self.record_bad(address, "invalid transaction")
+        self.record_bad(address, "invalid_transaction")
+
+    def should_evict(self, address: str) -> bool:
+        return self.get_score(address).should_evict()
     
     def get_best_peers(self, limit: int = 10) -> list:
         """Get highest scoring peers."""

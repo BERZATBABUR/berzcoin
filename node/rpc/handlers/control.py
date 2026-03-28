@@ -103,7 +103,12 @@ class ControlHandlers:
                     'proxy': '',
                     'proxy_randomize_credentials': False
                 }
-            ]
+            ],
+            'authority_chain': (
+                connman.authority_chain.get_status()
+                if getattr(connman, "authority_chain_enabled", False)
+                else {"enabled": False}
+            ),
         }
 
     async def get_difficulty(self) -> float:
@@ -125,10 +130,11 @@ class ControlHandlers:
         return pow_check.calculate_difficulty(header.bits)
 
     async def _get_total_balance(self) -> int:
-        if not hasattr(self.node, 'wallet') or not self.node.wallet:
+        manager = getattr(self.node, "simple_wallet_manager", None)
+        chainstate = getattr(self.node, "chainstate", None)
+        if not manager or not chainstate:
             return 0
-
-        return self.node.wallet.get_balance()
+        return int(manager.get_balance(chainstate))
 
     async def _shutdown(self) -> None:
         await asyncio.sleep(1)
@@ -144,3 +150,27 @@ class ControlHandlers:
 
     async def uptime(self) -> int:
         return int(time.time() - self.start_time)
+
+    async def get_health(self) -> Dict[str, Any]:
+        """Detailed node health report."""
+        checker = getattr(self.node, "health_checker", None)
+        if checker is None:
+            return {"status": "unknown", "message": "Health checker not initialized"}
+        return await checker.check()
+
+    async def get_readiness(self) -> Dict[str, Any]:
+        """Readiness gate for load balancers and orchestration."""
+        checker = getattr(self.node, "health_checker", None)
+        if checker is None:
+            return {"ready": False, "reason": "health_checker_missing"}
+        return {"ready": bool(checker.is_ready())}
+
+    async def get_metrics(self) -> Dict[str, Any]:
+        """Node/system metrics snapshot."""
+        collector = getattr(self.node, "metrics_collector", None)
+        if collector is None:
+            return {"error": "metrics collector not initialized"}
+        return {
+            "metrics": collector.get_metrics(),
+            "rates": collector.get_rate(),
+        }

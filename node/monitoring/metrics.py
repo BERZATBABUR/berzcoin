@@ -63,9 +63,9 @@ class MetricsCollector:
             except Exception:
                 pass
         
-        if getattr(self.node, 'wallet', None):
+        if getattr(self.node, 'simple_wallet_manager', None) and getattr(self.node, 'chainstate', None):
             try:
-                wallet_balance.set(self.node.wallet.get_balance())
+                wallet_balance.set(self.node.simple_wallet_manager.get_balance(self.node.chainstate))
             except Exception:
                 pass
     

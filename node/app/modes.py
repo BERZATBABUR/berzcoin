@@ -34,7 +34,8 @@ class ModeManager:
         if self.config.get("prune", 0) > 0:
             return NodeMode.PRUNED
         if self.config.get("lightwallet"):
-            return NodeMode.LIGHT
+            logger.warning("lightwallet mode is disabled in this release; using full mode")
+            self.config.set("lightwallet", False)
         return NodeMode.FULL
 
     def is_full_node(self) -> bool:
@@ -67,8 +68,6 @@ class ModeManager:
             components.append("txindex")
         if self.config.get("addressindex"):
             components.append("addressindex")
-        if self.config.get("lightwallet"):
-            components.extend(["cfilters", "filter_server"])
         return components
 
     def get_component_config(self, component: str) -> dict:
@@ -94,7 +93,7 @@ class ModeManager:
             "wallet": {
                 "path": self.config.get_datadir() / "wallets" / self.config.get("wallet"),
                 "network": self.config.get("network"),
-                "password": self.config.get("walletpassphrase"),
+                "private_key": self.config.get("wallet_private_key"),
             },
             "mining": {
                 "address": self.config.get("miningaddress"),
@@ -102,8 +101,6 @@ class ModeManager:
             },
             "txindex": {"enabled": self.config.get("txindex")},
             "addressindex": {"enabled": self.config.get("addressindex")},
-            "cfilters": {"enabled": self.config.get("lightwallet")},
-            "filter_server": {"port": self.config.get("filterport")},
         }
         return cfg.get(component, {})
 

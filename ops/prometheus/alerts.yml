@@ -1,0 +1,56 @@
+groups:
+  - name: berzcoin-node-alerts
+    rules:
+      - alert: BerzCoinNodeDown
+        expr: absent(berzcoin_uptime_seconds)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "BerzCoin node metrics are unavailable"
+          description: "No berzcoin_uptime_seconds series scraped for 2 minutes."
+
+      - alert: BerzCoinReadinessFailed
+        expr: berzcoin_readiness_slo == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "BerzCoin node not ready"
+          description: "Readiness SLO has been failing for 5 minutes."
+
+      - alert: BerzCoinSyncLagHigh
+        expr: berzcoin_sync_lag_blocks > 24
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "BerzCoin sync lag is elevated"
+          description: "Node is lagging behind peers for at least 10 minutes."
+
+      - alert: BerzCoinSyncLagCritical
+        expr: berzcoin_sync_lag_blocks > 144
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "BerzCoin sync lag is critical"
+          description: "Node fell far behind peers and may need operator action."
+
+      - alert: BerzCoinPeerCountLow
+        expr: berzcoin_peer_count < 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "BerzCoin has no peers"
+          description: "Peer count below 1 for 15 minutes; check networking and seeds."
+
+      - alert: BerzCoinDBGrowthSpike
+        expr: rate(berzcoin_chainstate_db_size_bytes[30m]) > 10000000
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "BerzCoin DB growth rate is unusually high"
+          description: "Chainstate DB growth may indicate excessive churn or storage issues."

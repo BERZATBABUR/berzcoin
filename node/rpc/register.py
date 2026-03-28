@@ -52,8 +52,6 @@ def register_default_handlers(server: RPCServer, node: Any) -> None:
         'list_transactions': wallet.list_transactions,
         'create_wallet': wallet.create_wallet,
         'load_wallet': wallet.load_wallet,
-        'lock_wallet': wallet.lock_wallet,
-        'unlock_wallet': wallet.unlock_wallet,
         'get_address_info': wallet.get_address_info,
         'get_mining_info': mining.get_mining_info,
         'get_block_template': mining.get_block_template,

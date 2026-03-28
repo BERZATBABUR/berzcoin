@@ -3,6 +3,36 @@
 from dataclasses import dataclass
 from typing import Dict, Any
 
+SATOSHI = 1
+COIN = 100_000_000  # 1 BERZ = 100,000,000 sat (Bitcoin-style base unit)
+MAX_SUPPLY_BERZ = 2 ** 24
+MAX_MONEY = MAX_SUPPLY_BERZ * COIN
+HALVING_YEARS = 4
+
+# BerzCoin network magic values (message-start bytes).
+MAINNET_MAGIC = b"\xb7\xd9\xc4\xef"
+TESTNET_MAGIC = b"\xce\xe2\xca\xff"
+REGTEST_MAGIC = b"\xfa\xce\xb0\x0c"
+
+# BerzCoin network-owned genesis anchors (derived March 27, 2026).
+MAINNET_GENESIS_HASH = "0000a2b00a878937fe2431db054cc73784721f63ee8bacffe1e0aa0612f01f25"
+MAINNET_GENESIS_TIME = 1774569600  # 2026-03-27 00:00:00 UTC
+MAINNET_GENESIS_NONCE = 24409
+MAINNET_GENESIS_BITS = 0x207FFFFF
+MAINNET_GENESIS_MERKLE_ROOT = "2ed9e25352bd4cdbd52a7d5afc3b780f9dd5b2dd3425c66d8b8f1c45e72d74e2"
+
+TESTNET_GENESIS_HASH = "0000a21d5c6616e56712e4e80ab1a3fb8d859bc386a54bf8e3cb3e104c96726f"
+TESTNET_GENESIS_TIME = 1774569660
+TESTNET_GENESIS_NONCE = 17146
+TESTNET_GENESIS_BITS = 0x207FFFFF
+TESTNET_GENESIS_MERKLE_ROOT = "50e9ba90db5c87178f43191d5d39f048593789a3f167b59b14887626479a5dbb"
+
+REGTEST_GENESIS_HASH = "0000febb790a74d4063fecb92bca9797baf04f499f1b0679cf942d746a4ff974"
+REGTEST_GENESIS_TIME = 1774569720
+REGTEST_GENESIS_NONCE = 25343
+REGTEST_GENESIS_BITS = 0x207FFFFF
+REGTEST_GENESIS_MERKLE_ROOT = "dc11f6262a71d2abf20588f8f537f8264f07432d3d539a482ade6756da7db514"
+
 @dataclass
 class ConsensusParams:
     """Consensus parameters for different networks."""
@@ -42,99 +72,127 @@ class ConsensusParams:
     default_port: int
     dns_seeds: list
     checkpoint_data: Dict[int, str]
+    max_money: int
 
     def retarget_interval_blocks(self) -> int:
         """Blocks between difficulty adjustments (e.g. 2016 when span 2 weeks / 10 min spacing)."""
         spacing = max(1, self.pow_target_spacing)
         return max(1, self.pow_target_timespan // spacing)
 
+    @staticmethod
+    def _four_year_halving_interval(block_spacing_seconds: int) -> int:
+        seconds = HALVING_YEARS * 365 * 24 * 60 * 60
+        return max(1, seconds // max(1, int(block_spacing_seconds)))
+
+    @staticmethod
+    def _initial_subsidy_for_cap(max_money: int, halving_interval: int) -> int:
+        # For an infinite halving series, total ~= 2 * interval * subsidy.
+        # We floor to sat units and keep issuance <= cap.
+        return max(1, int(max_money) // max(1, 2 * int(halving_interval)))
+
     @classmethod
     def mainnet(cls) -> 'ConsensusParams':
         """Mainnet consensus parameters."""
+        spacing = 120  # 2 minutes
+        halving_interval = cls._four_year_halving_interval(spacing)
         return cls(
             max_block_size=1000000,
             max_block_weight=4000000,
             max_block_sigops=20000,
-            pow_target_spacing=120,  # 2 minutes
+            pow_target_spacing=spacing,
             pow_target_timespan=1209600,  # 2 weeks
-            pow_limit=0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+            # CPU-friendly pow limit for BerzCoin's standalone network profile.
+            pow_limit=0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
             pow_no_retargeting=False,
-            initial_subsidy=2 * 100000000,  # 2 BerzCoin in satoshis
-            # Halving every 4 years -> blocks = (4*365*24*3600) / spacing
-            subsidy_halving_interval=1051200,
+            initial_subsidy=cls._initial_subsidy_for_cap(MAX_MONEY, halving_interval),
+            subsidy_halving_interval=halving_interval,
             bip34_height=227931,
             bip66_height=363725,
             bip65_height=388381,
             csv_height=419328,
             segwit_height=481824,
-            genesis_block_hash="000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
-            genesis_time=1231006505,
-            genesis_nonce=2083236893,
-            genesis_bits=0x1d00ffff,
+            genesis_block_hash=MAINNET_GENESIS_HASH,
+            genesis_time=MAINNET_GENESIS_TIME,
+            genesis_nonce=MAINNET_GENESIS_NONCE,
+            genesis_bits=MAINNET_GENESIS_BITS,
             genesis_version=1,
-            genesis_merkle_root="4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
-            message_magic=b'\xf9\xbe\xb4\xd9',
+            genesis_merkle_root=MAINNET_GENESIS_MERKLE_ROOT,
+            message_magic=MAINNET_MAGIC,
             default_port=8333,
             dns_seeds=[
-                "seed.berzcoin.sipa.be",
-                "dnsseed.bluematt.me",
-                "seed.bitcoinstats.com",
-                "seed.bitcoin.sipa.be"
+                "seed1.berzcoin.org",
+                "seed2.berzcoin.org",
+                "seed3.berzcoin.org",
+                "dnsseed.berzcoin.org",
             ],
             checkpoint_data={
-                0: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
-                11111: "0000000069e244f73d78e8fd29ba2fd2ed618bd6fa2ee92559f542fdb26e7c1d",
-                100000: "000000000003ba27aa200b1cecaad478d2b00432346c3f1f3986da1afd33e506",
-            }
+                0: MAINNET_GENESIS_HASH,
+            },
+            max_money=MAX_MONEY,
         )
     
     @classmethod
     def testnet(cls) -> 'ConsensusParams':
         """Testnet consensus parameters."""
         params = cls.mainnet()
-        params.pow_limit = 0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff
-        # Enable retargeting and use mainnet subsidy (2 BerzCoin)
+        params.pow_limit = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+        # Keep 4-year halving and cap-derived subsidy across networks.
         params.pow_no_retargeting = False
-        params.initial_subsidy = 2 * 100000000
+        params.initial_subsidy = cls._initial_subsidy_for_cap(params.max_money, params.subsidy_halving_interval)
+        params.genesis_block_hash = TESTNET_GENESIS_HASH
+        params.genesis_time = TESTNET_GENESIS_TIME
+        params.genesis_nonce = TESTNET_GENESIS_NONCE
+        params.genesis_bits = TESTNET_GENESIS_BITS
+        params.genesis_merkle_root = TESTNET_GENESIS_MERKLE_ROOT
         params.bip34_height = 21111
         params.bip66_height = 330776
         params.bip65_height = 330776
         params.csv_height = 330776
         params.segwit_height = 0  # Always active on testnet
-        params.message_magic = b'\x0b\x11\x09\x07'
+        params.message_magic = TESTNET_MAGIC
         params.default_port = 18333
         params.dns_seeds = [
-            "testnet-seed.berzcoin.jonasschnelli.ch",
-            "seed.tbtc.petertodd.org",
-            "testnet-seed.bluematt.me"
+            "testnet-seed1.berzcoin.org",
+            "testnet-seed2.berzcoin.org",
         ]
+        params.checkpoint_data = {0: TESTNET_GENESIS_HASH}
         return params
     
     @classmethod
     def regtest(cls) -> 'ConsensusParams':
         """Regression test consensus parameters."""
         params = cls.mainnet()
-        # Use fast 2-minute blocks and enable difficulty retargeting for regtest
+        # Regtest profile:
+        # - 120s nominal target block time
+        # - no retargeting (stable local mining for dev/demo workflows)
         params.pow_target_spacing = 120
-        params.pow_target_timespan = 1209600
+        params.pow_target_timespan = params.pow_target_spacing * 20
         params.pow_limit = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
-        params.pow_no_retargeting = False
+        params.pow_no_retargeting = True
+        params.subsidy_halving_interval = cls._four_year_halving_interval(params.pow_target_spacing)
+        params.initial_subsidy = cls._initial_subsidy_for_cap(params.max_money, params.subsidy_halving_interval)
+        params.genesis_block_hash = REGTEST_GENESIS_HASH
+        params.genesis_time = REGTEST_GENESIS_TIME
+        params.genesis_nonce = REGTEST_GENESIS_NONCE
+        params.genesis_bits = REGTEST_GENESIS_BITS
+        params.genesis_merkle_root = REGTEST_GENESIS_MERKLE_ROOT
         params.bip34_height = 100000000  # Never activates
         params.bip66_height = 100000000
         params.bip65_height = 100000000
         params.csv_height = 100000000
         params.segwit_height = 0  # Always active
-        params.message_magic = b'\xfa\xbf\xb5\xda'
+        params.message_magic = REGTEST_MAGIC
         params.default_port = 18444
         params.dns_seeds = []
+        params.checkpoint_data = {0: REGTEST_GENESIS_HASH}
         return params
     
     def get_network_name(self) -> str:
         """Get network name from magic bytes."""
-        if self.message_magic == b'\xf9\xbe\xb4\xd9':
+        if self.message_magic == MAINNET_MAGIC:
             return "mainnet"
-        elif self.message_magic == b'\x0b\x11\x09\x07':
+        elif self.message_magic == TESTNET_MAGIC:
             return "testnet"
-        elif self.message_magic == b'\xfa\xbf\xb5\xda':
+        elif self.message_magic == REGTEST_MAGIC:
             return "regtest"
         return "unknown"

@@ -125,22 +125,44 @@ class MiningHandlers:
         }
 
     async def submit_block(self, hex_data: str) -> str:
+        """Validate and connect a candidate block to the active chain tip."""
         block_bytes = bytes.fromhex(hex_data.strip())
         block, _ = Block.deserialize(block_bytes)
+        block_hash = block.header.hash_hex()
+
+        if hasattr(self.node, "on_block"):
+            accepted, _bh, reason = await self.node.on_block(
+                block, source_peer=None, relay=False
+            )
+            if accepted or reason == "known":
+                return block_hash
+            raise ValueError(f"Block rejected: {reason}")
 
         chain = self.node.chainstate
-        best_hash = chain.get_best_block_hash()
-        prev_block = chain.get_block(best_hash) if best_hash else None
         height = chain.get_best_height() + 1
+        if not chain.validate_block_stateful(block, height):
+            raise ValueError(f"Invalid block at height {height}")
+        if chain.block_index.get_block(block_hash):
+            return block_hash
 
-        try:
-            chain.rules.validate_block(block, prev_block, height)
-        except ValueError as e:
-            raise ValueError(str(e)) from e
+        block_work = chain.chainwork.calculate_chain_work([block.header])
+        chainwork_total = chain.get_best_chainwork() + block_work
 
-        # Full acceptance requires index + storage + ConnectBlock; not wired here.
-        logger.info(f"submit_block: validated header {block.header.hash_hex()[:16]} at height {height}")
-        return block.header.hash_hex()
+        chain.blocks_store.write_block(block, height)
+        chain.block_index.add_block(block, height, chainwork_total)
+
+        connect = ConnectBlock(
+            chain.utxo_store,
+            chain.block_index,
+            network=chain.params.get_network_name(),
+        )
+        if not connect.connect(block):
+            raise ValueError("Block connect failed")
+
+        chain.set_best_block(block_hash, height, chainwork_total)
+        chain.header_chain.add_header(block.header, height, chainwork_total)
+        logger.info("submit_block: connected block %d %s", height, block_hash[:16])
+        return block_hash
 
     async def get_network_hashps(self, blocks: int = 120, height: int = -1) -> float:
         _ = blocks, height
@@ -176,14 +198,20 @@ class MiningHandlers:
                 logger.warning("Failed to mine block")
                 break
 
-            best_hash = chain.get_best_block_hash()
-            prev_block = chain.get_block(best_hash) if best_hash else None
-            height = chain.get_best_height() + 1
+            if hasattr(self.node, "on_block"):
+                accepted, block_hash, reason = await self.node.on_block(
+                    block, source_peer=None, relay=True
+                )
+                if not accepted:
+                    logger.warning("generate: invalid block: %s", reason)
+                    break
+                generated.append(block_hash)
+                logger.info("Generated block %s: %s", chain.get_best_height(), block_hash[:16])
+                continue
 
-            try:
-                chain.rules.validate_block(block, prev_block, height)
-            except ValueError as e:
-                logger.warning("generate: invalid block: %s", e)
+            height = chain.get_best_height() + 1
+            if not chain.validate_block_stateful(block, height):
+                logger.warning("generate: invalid block at height %d", height)
                 break
 
             block_work = chain.chainwork.calculate_chain_work([block.header])

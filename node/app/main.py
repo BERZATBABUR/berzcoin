@@ -12,20 +12,36 @@ from node.mempool.pool import Mempool
 from node.mining.miner import MiningNode
 from node.p2p.addrman import AddrMan
 from node.p2p.connman import ConnectionManager
-from node.p2p.dns_seeds import DNSSeeds
 from node.rpc.handlers.blockchain import BlockchainHandlers
 from node.rpc.handlers.control import ControlHandlers
 from node.rpc.handlers.mempool import MempoolHandlers
 from node.rpc.handlers.mining import MiningHandlers
 from node.rpc.handlers.mining_control import MiningControlHandlers
-
+from node.rpc.handlers.wallet import WalletHandlers
 from node.rpc.handlers.wallet_control import WalletControlHandlers
 from node.rpc.server import RPCServer
 from node.storage.blocks_store import BlocksStore
 from node.storage.db import Database
 from node.storage.migrations import Migrations, register_standard_migrations
 from node.storage.utxo_store import UTXOStore
+from shared.core.transaction import Transaction
+from shared.core.block import Block
+from shared.protocol.messages import (
+    InvMessage,
+    GetDataMessage,
+    GetHeadersMessage,
+    HeadersMessage,
+    TxMessage,
+    BlockMessage,
+    PingMessage,
+    PongMessage,
+    SendCmpctMessage,
+    CmpctBlockMessage,
+)
+from node.p2p.orphanage import Orphanage
 from node.wallet.simple_wallet import SimpleWalletManager
+from .health import HealthChecker
+from .metrics import MetricsCollector
 from .components import ComponentManager
 from .config import Config
 from .modes import ModeManager
@@ -48,10 +64,21 @@ class BerzCoinNode:
         self.chainstate: Optional[ChainState] = None
         self.connman: Optional[ConnectionManager] = None
         self.mempool: Optional[Mempool] = None
-        self.wallet_manager: Optional[SimpleWalletManager] = None
+        self.simple_wallet_manager: Optional[SimpleWalletManager] = None
         self.miner: Optional[MiningNode] = None
         self.rpc_server: Optional[RPCServer] = None
         self.dashboard: Any = None
+        self.health_checker: Optional[HealthChecker] = None
+        self.metrics_collector: Optional[MetricsCollector] = None
+        self.block_sync: Any = None
+        self.orphanage = Orphanage(
+            max_orphans=int(self.config.get("max_orphans", 200)),
+            max_age=int(self.config.get("max_orphan_age_secs", 7200)),
+        )
+        self._known_txs: set[str] = set()
+        self._known_blocks: set[str] = set()
+        self._peer_msg_window: Dict[str, tuple[float, int]] = {}
+        self._max_msgs_per_sec = int(self.config.get("p2p_max_msgs_per_sec", 300))
 
         self.running = False
         self.sync_task: Optional[asyncio.Task] = None
@@ -84,6 +111,8 @@ class BerzCoinNode:
             return False
         if not await self._init_rpc():
             return False
+        self.health_checker = HealthChecker(self)
+        self.metrics_collector = MetricsCollector(self)
 
         logger.info("Node initialized successfully")
         return True
@@ -112,7 +141,7 @@ class BerzCoinNode:
                 self.utxo_store,
             )
             try:
-                coro = bootstrap.sync_full_chain()
+                coro = bootstrap.sync_full_chain(replay_rebuild=True)
                 await asyncio.wait_for(coro, timeout=300)
             except asyncio.TimeoutError:
                 logger.warning("Bootstrap timeout")
@@ -156,6 +185,376 @@ class BerzCoinNode:
 
         logger.info("Node stopped")
 
+    async def on_transaction(
+        self,
+        tx: Transaction,
+        source_peer: Optional[str] = None,
+        relay: bool = True,
+    ) -> tuple[bool, str, Optional[str]]:
+        """Validation-first transaction intake owned by the node."""
+        txid = tx.txid().hex()
+        if not self.mempool:
+            return False, txid, "mempool_unavailable"
+
+        accepted = await self.mempool.add_transaction(tx, source_peer=source_peer)
+        if not accepted:
+            return False, txid, self.mempool.last_reject_reason or "mempool_rejected"
+
+        if relay and self.connman:
+            inv = InvMessage(inventory=[(InvMessage.InvType.MSG_TX, tx.txid())])
+            await self.connman.broadcast(
+                "inv",
+                inv.serialize(),
+                exclude={source_peer} if source_peer else None,
+            )
+        self._remember_known_tx(txid)
+        return True, txid, None
+
+    async def on_block(
+        self,
+        block: Block,
+        source_peer: Optional[str] = None,
+        relay: bool = False,
+    ) -> tuple[bool, str, Optional[str]]:
+        """Single validation/acceptance pipeline for incoming blocks."""
+        if not self.chainstate:
+            return False, "", "chainstate_unavailable"
+        block_hash = block.header.hash_hex()
+        if self.chainstate.block_index.get_block(block_hash):
+            return True, block_hash, "known"
+
+        self.orphanage.cleanup_expired()
+
+        prev_hash = block.header.prev_block_hash.hex()
+        parent_entry = self.chainstate.block_index.get_block(prev_hash)
+        if parent_entry is None:
+            self.orphanage.add_orphan(block, source_peer=source_peer)
+            return False, block_hash, "orphan"
+
+        height = int(parent_entry.height) + 1
+        prev_block = self.chainstate.get_block(prev_hash)
+        best_hash = self.chainstate.get_best_block_hash()
+        if best_hash == prev_hash:
+            if not self.chainstate.validate_block_stateful(block, height):
+                return False, block_hash, "stateful_validation_failed"
+        else:
+            try:
+                self.chainstate.rules.validate_block(block, prev_block, height)
+            except Exception:
+                return False, block_hash, "consensus_rule_invalid"
+
+        block_work = self.chainstate.chainwork.calculate_chain_work([block.header])
+        chainwork_total = int(parent_entry.chainwork) + int(block_work)
+
+        self.chainstate.blocks_store.write_block(block, height)
+        self.chainstate.block_index.add_block(
+            block, height, chainwork_total, update_best=False
+        )
+        self.chainstate.header_chain.add_header(block.header, height, chainwork_total)
+
+        if best_hash == prev_hash:
+            ok = await self._connect_as_new_tip(block, height, chainwork_total)
+            if not ok:
+                return False, block_hash, "connect_failed"
+            if relay and self.connman:
+                await self.connman.broadcast_block(block)
+            self._remember_known_block(block_hash)
+            await self._process_orphan_children(block_hash, relay=relay)
+            return True, block_hash, None
+
+        # Side-branch block
+        if chainwork_total <= self.chainstate.get_best_chainwork():
+            return True, block_hash, "stored_fork"
+
+        # Heavier side branch -> attempt reorg.
+        from node.chain.reorg import ReorgManager
+
+        current_best = self.chainstate.block_index.get_block(best_hash) if best_hash else None
+        candidate_best = self.chainstate.block_index.get_block(block_hash)
+        if current_best is None or candidate_best is None:
+            return False, block_hash, "reorg_missing_index_entry"
+
+        reorg = ReorgManager(
+            self.chainstate.utxo_store,
+            self.chainstate.block_index,
+            max_reorg_depth=int(self.config.get("max_reorg_depth", 144)),
+        )
+        if not reorg.can_reorganize(
+            candidate_best,
+            current_best,
+            get_block_func=self.chainstate.get_block,
+        ):
+            return False, block_hash, "reorg_preflight_failed"
+        ok, _disconnected, connected = reorg.reorganize(
+            candidate_best,
+            current_best,
+            get_block_func=self.chainstate.get_block,
+        )
+        if not ok:
+            return False, block_hash, "reorg_failed"
+
+        self.chainstate.set_best_block(
+            candidate_best.block_hash,
+            candidate_best.height,
+            candidate_best.chainwork,
+        )
+        if self.mempool:
+            for connected_block in connected:
+                await self.mempool.handle_connected_block(connected_block)
+        if relay and self.connman:
+            await self.connman.broadcast_block(block)
+        self._remember_known_block(block_hash)
+        await self._process_orphan_children(block_hash, relay=relay)
+        return True, block_hash, None
+
+    async def _connect_as_new_tip(self, block: Block, height: int, chainwork_total: int) -> bool:
+        from node.validation.connect import ConnectBlock
+
+        connect = ConnectBlock(
+            self.chainstate.utxo_store,
+            self.chainstate.block_index,
+            network=self.chainstate.params.get_network_name(),
+        )
+        if not connect.connect(block):
+            return False
+        block_hash = block.header.hash_hex()
+        self.chainstate.set_best_block(block_hash, height, chainwork_total)
+        if self.mempool:
+            await self.mempool.handle_connected_block(block)
+        return True
+
+    async def _process_orphan_children(self, parent_hash: str, relay: bool) -> None:
+        while True:
+            children = self.orphanage.get_children(parent_hash)
+            if not children:
+                return
+            progress = False
+            for child in children:
+                child_hash = child.header.hash_hex()
+                self.orphanage.remove_orphan(child_hash)
+                accepted, _, reason = await self.on_block(
+                    child, source_peer=None, relay=relay
+                )
+                if accepted:
+                    parent_hash = child_hash
+                    progress = True
+                elif reason == "orphan":
+                    # Parent still missing from this branch.
+                    self.orphanage.add_orphan(child, source_peer=None)
+            if not progress:
+                return
+
+    def _remember_known_tx(self, txid: str) -> None:
+        self._known_txs.add(txid)
+        if len(self._known_txs) > 200_000:
+            self._known_txs.clear()
+
+    def _remember_known_block(self, block_hash: str) -> None:
+        self._known_blocks.add(block_hash)
+        if len(self._known_blocks) > 50_000:
+            self._known_blocks.clear()
+
+    def _peer_rate_limited(self, peer_addr: str) -> bool:
+        now = asyncio.get_event_loop().time()
+        window_start, count = self._peer_msg_window.get(peer_addr, (now, 0))
+        if now - window_start >= 1.0:
+            self._peer_msg_window[peer_addr] = (now, 1)
+            return False
+        count += 1
+        self._peer_msg_window[peer_addr] = (window_start, count)
+        return count > self._max_msgs_per_sec
+
+    async def _ensure_block_sync(self):
+        from node.p2p.sync import BlockSync
+
+        if self.block_sync is None:
+            self.block_sync = BlockSync(
+                self.chainstate,
+                mempool=self.mempool,
+                block_handler=self.on_block,
+                getdata_batch_size=int(self.config.get("sync_getdata_batch_size", 128)),
+                block_request_timeout_secs=int(
+                    self.config.get("sync_block_request_timeout_secs", 30)
+                ),
+            )
+
+    async def _on_p2p_message(self, peer, command: str, payload: bytes) -> None:
+        """Handle inbound P2P messages with validation-first relay behavior."""
+        if self._peer_rate_limited(peer.address):
+            if self.connman:
+                self.connman.peer_scores.record_bad(peer.address, "msg_rate_limit")
+            return
+
+        try:
+            if command == "sendcmpct":
+                msg, _ = SendCmpctMessage.deserialize(payload)
+                peer.prefers_compact_blocks = bool(msg.announce)
+                peer.compact_block_version = int(msg.version)
+                return
+
+            if command == "inv":
+                inv, _ = InvMessage.deserialize(payload)
+                max_inv = 2000
+                inventory = inv.inventory
+                if len(inventory) > max_inv:
+                    if self.connman:
+                        self.connman.peer_scores.record_bad(peer.address, "relay_spam")
+                    inventory = inventory[:max_inv]
+                seen: set[tuple[int, bytes]] = set()
+                for inv_type, inv_hash in inventory:
+                    key = (int(inv_type), bytes(inv_hash))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if inv_type == InvMessage.InvType.MSG_TX:
+                        txid = inv_hash.hex()
+                        if txid in self._known_txs:
+                            continue
+                        if self.mempool and await self.mempool.get_transaction(txid):
+                            self._remember_known_tx(txid)
+                            continue
+                        await peer.send_getdata(inv_type, inv_hash)
+                    elif inv_type == InvMessage.InvType.MSG_BLOCK:
+                        block_hash = inv_hash[::-1].hex()
+                        if block_hash in self._known_blocks:
+                            continue
+                        if self.chainstate and self.chainstate.block_index.get_block(block_hash):
+                            self._remember_known_block(block_hash)
+                            continue
+                        await peer.send_getdata(inv_type, inv_hash)
+                    elif inv_type == InvMessage.InvType.MSG_CMPCT_BLOCK:
+                        await peer.send_getdata(inv_type, inv_hash)
+                    elif self.connman:
+                        self.connman.peer_scores.record_bad(peer.address, "protocol_violation")
+                return
+
+            if command == "tx":
+                tx_msg, _ = TxMessage.deserialize(payload)
+                tx, _ = Transaction.deserialize(tx_msg.transaction)
+                txid = tx.txid().hex()
+                if txid in self._known_txs:
+                    return
+                accepted, _, _reason = await self.on_transaction(
+                    tx, source_peer=peer.address, relay=True
+                )
+                if accepted:
+                    self._remember_known_tx(txid)
+                return
+
+            if command == "block":
+                blk_msg, _ = BlockMessage.deserialize(payload)
+                block, _ = Block.deserialize(blk_msg.block)
+                block_hash = block.header.hash_hex()
+                if block_hash in self._known_blocks:
+                    return
+                accepted, _, _reason = await self.on_block(
+                    block, source_peer=peer.address, relay=True
+                )
+                if accepted:
+                    self._remember_known_block(block_hash)
+                return
+
+            if command == "cmpctblock":
+                cmpct_msg, _ = CmpctBlockMessage.deserialize(payload)
+                compact_block_hash = cmpct_msg.block_hash()
+                block_hash_hex = compact_block_hash[::-1].hex()
+                if block_hash_hex in self._known_blocks:
+                    return
+                if self.chainstate and self.chainstate.block_index.get_block(block_hash_hex):
+                    self._remember_known_block(block_hash_hex)
+                    return
+                # Fallback pipeline: request full block for strict validation path.
+                await peer.send_getdata(InvMessage.InvType.MSG_BLOCK, compact_block_hash)
+                return
+
+            if command == "getdata":
+                req, _ = GetDataMessage.deserialize(payload)
+                max_getdata = 1024
+                inventory = req.inventory
+                if len(inventory) > max_getdata:
+                    if self.connman:
+                        self.connman.peer_scores.record_bad(peer.address, "relay_spam")
+                    inventory = inventory[:max_getdata]
+                for inv_type, inv_hash in inventory:
+                    if inv_type == InvMessage.InvType.MSG_TX and self.mempool:
+                        tx = await self.mempool.get_transaction(inv_hash.hex())
+                        if tx:
+                            msg = TxMessage(transaction=tx.serialize())
+                            await peer.send_message("tx", msg.serialize())
+                    elif inv_type == InvMessage.InvType.MSG_BLOCK:
+                        block_hash = inv_hash[::-1].hex()
+                        block = self.chainstate.get_block(block_hash) if self.chainstate else None
+                        if block:
+                            msg = BlockMessage(block=block.serialize())
+                            await peer.send_message("block", msg.serialize())
+                    elif inv_type == InvMessage.InvType.MSG_CMPCT_BLOCK:
+                        block_hash = inv_hash[::-1].hex()
+                        block = self.chainstate.get_block(block_hash) if self.chainstate else None
+                        if block:
+                            cmpct = CmpctBlockMessage.from_block(block)
+                            await peer.send_message("cmpctblock", cmpct.serialize())
+                return
+
+            if command == "getheaders":
+                if not self.chainstate:
+                    return
+                req, _ = GetHeadersMessage.deserialize(payload)
+                start_height = 0
+                for locator_hash in req.block_locator_hashes:
+                    h = self.chainstate.get_height(locator_hash.hex())
+                    if h is not None:
+                        start_height = int(h) + 1
+                        break
+                best = self.chainstate.get_best_height()
+                headers: list[bytes] = []
+                for h in range(start_height, min(best + 1, start_height + 2000)):
+                    header = self.chainstate.get_header(h)
+                    if not header:
+                        continue
+                    headers.append(header.serialize())
+                await peer.send_message("headers", HeadersMessage(headers=headers).serialize())
+                return
+
+            if command == "getblocks":
+                if not self.chainstate:
+                    return
+                req, _ = GetBlocksMessage.deserialize(payload)
+                start_height = 0
+                for locator_hash in req.block_locator_hashes:
+                    h = self.chainstate.get_height(locator_hash.hex())
+                    if h is not None:
+                        start_height = int(h) + 1
+                        break
+
+                best = self.chainstate.get_best_height()
+                max_inv = 500
+                inventory: list[tuple[int, bytes]] = []
+                for h in range(start_height, min(best + 1, start_height + max_inv)):
+                    header = self.chainstate.get_header(h)
+                    if not header:
+                        continue
+                    inventory.append((InvMessage.InvType.MSG_BLOCK, header.hash()))
+
+                if inventory:
+                    await peer.send_message("inv", InvMessage(inventory=inventory).serialize())
+                return
+
+            if command == "headers":
+                await self._ensure_block_sync()
+                headers_msg, _ = HeadersMessage.deserialize(payload)
+                await self.block_sync.process_headers(peer, headers_msg.headers)
+                return
+
+            if command == "ping":
+                ping, _ = PingMessage.deserialize(payload)
+                await peer.send_message("pong", PongMessage(nonce=ping.nonce).serialize())
+                return
+
+        except Exception as e:
+            if self.connman and command in {"inv", "getdata", "cmpctblock", "sendcmpct"}:
+                self.connman.peer_scores.record_bad(peer.address, "protocol_violation")
+            logger.debug("P2P message handling error (%s): %s", command, e)
+
     async def _run_sync_loop(self) -> None:
         """Run block synchronization loop."""
         assert self.chainstate is not None
@@ -177,16 +576,25 @@ class BerzCoinNode:
                             )
 
                             from node.p2p.sync import BlockSync
-                            sync = BlockSync(self.chainstate)
-                            await sync.sync_from_peer(best_peer)
+                            if self.block_sync is None:
+                                self.block_sync = BlockSync(
+                                    self.chainstate,
+                                    mempool=self.mempool,
+                                    block_handler=self.on_block,
+                                    getdata_batch_size=int(self.config.get("sync_getdata_batch_size", 128)),
+                                    block_request_timeout_secs=int(
+                                        self.config.get("sync_block_request_timeout_secs", 30)
+                                    ),
+                                )
+                            await self.block_sync.sync_from_peer(best_peer)
 
-                await asyncio.sleep(30)
+                await asyncio.sleep(max(1, int(self.config.get("sync_poll_interval_secs", 30))))
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Sync loop error: {e}")
-                await asyncio.sleep(60)
+                await asyncio.sleep(max(1, int(self.config.get("sync_error_backoff_secs", 60))))
 
     async def _init_database(self) -> bool:
         """Initialize database."""
@@ -205,7 +613,11 @@ class BerzCoinNode:
         data_dir = str(self.config.get_datadir())
         # ensure database initialized for type checkers
         assert self.db is not None
-        self.blocks_store = BlocksStore(self.db, data_dir)
+        self.blocks_store = BlocksStore(
+            self.db,
+            data_dir,
+            cache_size=int(self.config.get("blocks_cache_size", 100)),
+        )
         self.utxo_store = UTXOStore(self.db)
         self.chainstate = ChainState(
             self.db,
@@ -235,17 +647,17 @@ class BerzCoinNode:
 
     async def _init_p2p(self) -> bool:
         """Initialize P2P network."""
-        is_light = self.mode_manager.is_light_node()
-        is_full = self.mode_manager.is_full_node()
-        if is_light and not is_full:
-            self.connman = None
-            return True
+        # This release intentionally runs as a full/pruned validating node only.
+        if self.mode_manager.is_light_node():
+            logger.warning("Light node mode is disabled; initializing full P2P stack")
+            self.config.set("lightwallet", False)
 
         addrman = AddrMan()
         connect_only = self.config.is_connect_only()
         dns_seeds = None
-        if not connect_only and self.config.get("dnsseed"):
-            dns_seeds = DNSSeeds(self.config.get("dnsseeds"))
+        if self.config.get("dnsseed"):
+            logger.warning("DNS seed discovery is disabled in this release")
+            self.config.set("dnsseed", False)
 
         self.connman = ConnectionManager(
             addrman=addrman,
@@ -255,20 +667,30 @@ class BerzCoinNode:
             node_config=self.config,
             connect_only=connect_only,
         )
+        self.connman.on_message = self._on_p2p_message
+        if self.mempool is not None:
+            self.mempool.connman = self.connman
 
         return True
 
     async def _init_wallet(self) -> bool:
-        """Initialize simple wallet manager (private key based)."""
-        datadir = self.config.get_datadir()
-        self.wallet_manager = SimpleWalletManager(datadir)
+        """Initialize canonical simple private-key wallet manager."""
+        if self.config.get("disablewallet", False):
+            self.simple_wallet_manager = None
+            return True
 
-        # Check if wallet already exists
-        if self.config.get("wallet_private_key"):
-            pk = self.config.get("wallet_private_key")
-            self.wallet_manager.activate_wallet(pk)
-            logger.info("Wallet activated with provided key")
-
+        self.simple_wallet_manager = SimpleWalletManager(
+            self.config.get_datadir(),
+            network=self.config.get("network", "mainnet"),
+        )
+        activate_key = str(self.config.get("wallet_private_key", "") or "").strip()
+        if activate_key:
+            try:
+                wallet = self.simple_wallet_manager.activate_wallet(activate_key)
+                logger.info("Activated simple wallet from config: %s", wallet.address[:16])
+            except Exception as e:
+                logger.error("Failed to activate simple wallet from wallet_private_key: %s", e)
+                return False
         return True
 
     async def _init_mining(self) -> bool:
@@ -281,12 +703,12 @@ class BerzCoinNode:
 
         mining_address = self.config.get("miningaddress")
 
-        # If mining address not set, try to use active wallet
-        wm = self.wallet_manager
-        if not mining_address and wm and wm.get_active_wallet():
-            mining_address = wm.get_active_address()
-            if mining_address:
-                self.config.set("miningaddress", mining_address)
+        # If mining address not set, derive it from active private-key wallet identity.
+        manager = getattr(self, "simple_wallet_manager", None)
+        active_wallet = manager.get_active_wallet() if manager else None
+        if not mining_address and active_wallet:
+            mining_address = active_wallet.address
+            self.config.set("miningaddress", mining_address)
 
         # Ensure required subsystems
         assert self.chainstate is not None
@@ -294,12 +716,31 @@ class BerzCoinNode:
             # try to initialize a simple mempool if missing
             self.mempool = Mempool(self.chainstate)
 
+        require_wallet_match = bool(self.config.get("mining_require_wallet_match", True))
+        guard = None
+        if require_wallet_match:
+            guard = lambda addr: (
+                bool(addr)
+                and bool(getattr(self, "simple_wallet_manager", None))
+                and bool(self.simple_wallet_manager.get_active_wallet())
+                and self.simple_wallet_manager.get_active_wallet().address == addr
+            )
+
         self.miner = MiningNode(
             self.chainstate,
             self.mempool,
             mining_address or "",
             p2p_manager=self.connman,
+            address_guard=guard,
+            block_acceptor=self.on_block,
         )
+        configured_target_secs = int(self.config.get("mining_target_time_secs", 0) or 0)
+        if configured_target_secs > 0:
+            self.miner.target_time = configured_target_secs
+            logger.info(
+                "Mining target time override active: %ss/block",
+                configured_target_secs,
+            )
 
         return True
 
@@ -321,9 +762,10 @@ class BerzCoinNode:
         mempool = MempoolHandlers(self)
         mining = MiningHandlers(self)
         mining_control = MiningControlHandlers(self)
-        w_ctrl = WalletControlHandlers(self)  # noqa: F841
+        wallet = WalletHandlers(self)
+        w_ctrl = WalletControlHandlers(self)
 
-        self.rpc_server.register_handlers({
+        handlers = {
             # Control
             "get_info": control.get_info,
             "stop": control.stop,
@@ -331,6 +773,9 @@ class BerzCoinNode:
             "get_network_info": control.get_network_info,
             "ping": control.ping,
             "uptime": control.uptime,
+            "get_health": control.get_health,
+            "get_readiness": control.get_readiness,
+            "get_metrics": control.get_metrics,
 
             # Blockchain
             "get_blockchain_info": blockchain.get_blockchain_info,
@@ -342,15 +787,17 @@ class BerzCoinNode:
             "get_mempool_info": mempool.get_mempool_info,
             "get_raw_mempool": mempool.get_raw_mempool,
             "send_raw_transaction": mempool.send_raw_transaction,
+            "submit_package": mempool.submit_package,
 
-            # Wallet (private key based)
-            "create_wallet": self._rpc_create_wallet,
-            "activate_wallet": self._rpc_activate_wallet,
-            "deactivate_wallet": self._rpc_deactivate_wallet,
-            "get_wallet_info": self._rpc_get_wallet_info,
-            "get_wallet_balance": self._rpc_get_wallet_balance,
-            "get_wallet_address": self._rpc_get_wallet_address,
-            "send_to_address": self._rpc_send_to_address,
+            # Wallet (private-key model)
+            "get_wallet_info": wallet.get_wallet_info,
+            "get_balance": wallet.get_balance,
+            "get_new_address": wallet.get_new_address,
+            "send_to_address": wallet.send_to_address,
+            "createwallet": w_ctrl.create_wallet,
+            "loadwallet": w_ctrl.load_wallet,
+            "listwallets": w_ctrl.list_wallets,
+            "activatewallet": w_ctrl.activate_wallet,
 
             # Mining
             "get_mining_info": mining.get_mining_info,
@@ -360,7 +807,20 @@ class BerzCoinNode:
             "setgenerate": mining_control.set_generate,
             "getminingstatus": mining_control.get_mining_status,
             "setminingaddress": mining_control.set_mining_address,
-        })
+        }
+        self.rpc_server.register_handlers(handlers)
+        self.rpc_server.register_status_providers(
+            health_provider=control.get_health,
+            readiness_provider=control.get_readiness,
+            metrics_provider=control.get_metrics,
+            prometheus_provider=(
+                lambda: (
+                    self.metrics_collector.to_prometheus()
+                    if self.metrics_collector is not None
+                    else "# metrics unavailable\n"
+                )
+            ),
+        )
 
         # Web dashboard
         if self.config.get("webdashboard", False):
@@ -379,154 +839,6 @@ class BerzCoinNode:
             )
 
         return True
-
-    # RPC methods for simple wallet
-
-    async def _rpc_create_wallet(self) -> Dict[str, Any]:
-        """Create a new wallet (returns private key)."""
-        assert self.wallet_manager is not None
-        wallet = self.wallet_manager.create_wallet()
-        return {
-            "private_key": wallet.private_key_hex,
-            "public_key": wallet.public_key_hex,
-            "address": wallet.address,
-            "mnemonic": wallet.mnemonic,
-            "warning": "⚠️ SAVE YOUR PRIVATE KEY! You are responsible for it."
-        }
-
-    async def _rpc_activate_wallet(self, private_key: str) -> Dict[str, Any]:
-        """Activate wallet with private key."""
-        assert self.wallet_manager is not None
-        wallet = self.wallet_manager.activate_wallet(private_key)
-        if not wallet:
-            return {"error": "Invalid private key"}
-
-        assert self.chainstate is not None
-        bal = self.wallet_manager.get_balance(
-            self.chainstate,
-        )
-        return {
-            "address": wallet.address,
-            "public_key": wallet.public_key_hex,
-            "balance": bal / 100_000_000,
-        }
-
-    async def _rpc_deactivate_wallet(self) -> Dict[str, Any]:
-        """Deactivate current wallet."""
-        assert self.wallet_manager is not None
-        self.wallet_manager.deactivate_wallet()
-        return {"status": "deactivated"}
-
-    async def _rpc_get_wallet_info(self) -> Dict[str, Any]:
-        """Get current wallet info."""
-        assert self.wallet_manager is not None
-        wallet = self.wallet_manager.get_active_wallet()
-        if not wallet:
-            return {"active": False}
-
-        assert self.chainstate is not None
-        return {
-            "active": True,
-            "address": wallet.address,
-            "public_key": wallet.public_key_hex,
-            "private_key": self.wallet_manager.get_active_private_key(),
-            "mnemonic": wallet.mnemonic,
-            "balance": self.wallet_manager.get_balance(
-                self.chainstate,
-            ) / 100_000_000,
-        }
-
-    async def _rpc_get_wallet_balance(self) -> Dict[str, Any]:
-        """Get wallet balance."""
-        assert self.wallet_manager is not None
-        assert self.chainstate is not None
-        balance = self.wallet_manager.get_balance(self.chainstate)
-        return {"balance": balance / 100000000, "satoshis": balance}
-
-    async def _rpc_get_wallet_address(self) -> Dict[str, Any]:
-        """Get active wallet address."""
-        assert self.wallet_manager is not None
-        wallet = self.wallet_manager.get_active_wallet()
-        if not wallet:
-            return {"error": "No active wallet"}
-
-        return {"address": wallet.address}
-
-    async def _rpc_send_to_address(
-        self,
-        to_address: str,
-        amount: float,
-        private_key: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Send coins to address."""
-        assert self.wallet_manager is not None
-        assert self.chainstate is not None
-        assert self.mempool is not None
-        satoshis = int(amount * 100000000)
-
-        # Use provided private key or active wallet
-        if private_key:
-            wallet = self.wallet_manager.activate_wallet(private_key)
-            if not wallet:
-                return {"error": "Invalid private key"}
-        elif not self.wallet_manager.get_active_wallet():
-            return {"error": "No active wallet. Provide private key."}
-
-        address = self.wallet_manager.get_active_address()
-        if not address:
-            return {"error": "No active address"}
-
-        # Get UTXOs
-        utxos = self.chainstate.get_utxos_for_address(address, 1000)
-        if not utxos:
-            return {"error": "No UTXOs found"}
-
-        # Select UTXOs
-        selected = []
-        selected_amount = 0
-        for utxo in utxos:
-            selected.append(utxo)
-            selected_amount += utxo.get('value', 0)
-            if selected_amount >= satoshis:
-                break
-
-        if selected_amount < satoshis:
-            return {"error": "Insufficient funds"}
-
-        # Build transaction
-        from node.wallet.core.tx_builder import TransactionBuilder
-        builder = TransactionBuilder(self.config.get("network"))
-
-        inputs = [(u['txid'], u['vout'], u['value']) for u in selected]
-        outputs = [(to_address, satoshis)]
-        change_address = address
-
-        tx = builder.create_transaction(inputs, outputs, change_address)
-
-        # Sign transaction
-        from shared.crypto.keys import PrivateKey
-        from shared.crypto.signatures import sign_message_hash
-
-        pk_hex = self.wallet_manager.get_active_private_key()
-        if not pk_hex:
-            return {"error": "No active private key"}
-        private_key_obj = PrivateKey(int(pk_hex, 16))
-
-        for i, txin in enumerate(tx.vin):
-            sighash = tx.txid()
-            signature = sign_message_hash(private_key_obj, sighash)
-            txin.script_sig = signature + bytes([0x01])
-
-        # Broadcast
-        if await self.mempool.add_transaction(tx):
-            return {
-                "txid": tx.txid().hex(),
-                "from": address,
-                "to": to_address,
-                "amount": amount
-            }
-
-        return {"error": "Transaction rejected"}
 
     async def _wait_for_shutdown(self) -> None:
         """Wait for shutdown signal."""

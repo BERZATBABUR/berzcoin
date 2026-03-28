@@ -25,7 +25,7 @@ class TestNode(unittest.TestCase):
         self.config.set("port", 18444)
         self.config.set("rpcport", 18443)
         self.config.set("rpcbind", "127.0.0.1")
-        self.config.set("walletpassphrase", "integration_test_wallet_pw")
+        self.config.set("wallet_private_key", "")
         self.config.set("debug", True)
 
         self.node = BerzCoinNode()

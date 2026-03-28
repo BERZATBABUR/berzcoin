@@ -3,6 +3,7 @@
 import hashlib
 from typing import Tuple
 from .keys import PrivateKey, PublicKey
+from .secp256k1 import schnorr_sign_message, schnorr_verify_message
 
 def sign_message_hash(private_key: PrivateKey, message_hash: bytes) -> bytes:
     """Sign a message hash and return DER encoded signature.
@@ -88,3 +89,13 @@ def verify_signature(public_key: PublicKey, message_hash: bytes, signature: byte
     s = int.from_bytes(s_bytes, 'big')
 
     return public_key.verify(message_hash, (r, s))
+
+
+def sign_schnorr_message_hash(private_key: PrivateKey, message_hash: bytes) -> bytes:
+    """Sign a 32-byte hash with BIP340 Schnorr."""
+    return schnorr_sign_message(private_key.to_int(), message_hash)
+
+
+def verify_schnorr_signature(pubkey_xonly: bytes, message_hash: bytes, signature: bytes) -> bool:
+    """Verify BIP340 Schnorr signature over a 32-byte hash."""
+    return schnorr_verify_message(pubkey_xonly, message_hash, signature)

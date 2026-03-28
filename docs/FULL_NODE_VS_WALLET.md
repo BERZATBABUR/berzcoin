@@ -19,7 +19,7 @@ You **do not** get: `getbalance`, `getnewaddress`, `sendtoaddress`, `listunspent
 
 ## Full node with wallet enabled
 
-Remove **`--disablewallet`**, set **`disablewallet = false`** in config, and provide **`walletpassphrase`** (in config or **`--walletpassphrase`**) so the node can create or load **`datadir/wallets/<wallet>`**.
+Remove **`--disablewallet`**, set **`disablewallet = false`** in config, then activate with **`activatewallet <private_key_hex>`**.
 
 That adds: keystore, local UTXO tracking for the wallet, tx build/sign, and wallet RPC handlers.
 
@@ -86,13 +86,13 @@ berzcoind --regtest -conf ~/.berzcoin/berzcoin.conf
 ## Regtest mining
 
 - **`generate`** and **`setgenerate`** RPC are **regtest-only** in this implementation.
-- You need a **miner** (regtest always initializes one) and, for **`setgenerate`**, an unlocked wallet when required, plus a valid **`miningaddress`** where applicable.
+- You need a **miner** (regtest always initializes one) and, for **`setgenerate`**, an active private-key wallet identity plus a valid **`miningaddress`** where applicable.
 
 ## Mainnet “production” checklist (high level)
 
 1. **Real peers**: DNS names in **`dnsseeds`** must resolve to reachable **P2P** listeners; placeholder hostnames will fail DNS.
 2. **Network params**: `shared/consensus/params.py` / genesis artifacts as used by your deployment.
-3. **RPC security**: **`rpcbind`**, **`rpcallowip`**, cookie file permissions; avoid putting **`walletpassphrase`** on the shell if possible.
+3. **RPC security**: **`rpcbind`**, **`rpcallowip`**, cookie file permissions; avoid exposing private keys in shell history.
 4. **Process manager**: systemd unit, user account, `Restart=`, logging rotation — operational, not built into `berzcoind`.
 
 ## Optional ops (not in core `berzcoind`)
@@ -106,7 +106,8 @@ For a guided regtest profile (wallet file + config), see **`scripts/setup_regtes
 
 ## Analysis: what is still missing for a *resilient* public full node
 
-Your process already runs the **full-node component set** (DB, chainstate, mempool, P2P, RPC) when **`lightwallet`** is off and **`disablewallet`** is optional. The gaps below are about **joining a real network** and **day‑2 ops**—not about flipping another `full=true` switch.
+Your process already runs the **full-node component set** (DB, chainstate, mempool, P2P, RPC).  
+For v0.1 scope, **lightwallet and stratum are removed**; the remaining gaps are about **joining a real network** and **day‑2 ops**.
 
 ### 1. Peer bootstrap beyond DNS
 
@@ -140,7 +141,7 @@ Your process already runs the **full-node component set** (DB, chainstate, mempo
 
 | Area | Status today | Typical “add” for production |
 |------|----------------|-------------------------------|
-| Full validation + storage | Present | Keep **`lightwallet=false`** |
+| Full validation + storage | Present | Keep validating full-node profile |
 | P2P | Present | **Real DNS + `addnode` / `bootstrap_nodes.json` / `connect`** |
 | Mempool / relay | Present | Ensure peers (same as P2P) |
 | JSON‑RPC | Present | Lock down bind/allowlist |

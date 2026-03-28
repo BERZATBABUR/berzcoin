@@ -4,6 +4,7 @@ import shutil
 import time
 import json
 import zipfile
+import hashlib
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from shared.utils.logging import get_logger
@@ -29,7 +30,12 @@ class WalletBackup:
         
         self.backup_dir.mkdir(parents=True, exist_ok=True)
     
-    def create_backup(self, name: Optional[str] = None) -> Optional[str]:
+    def create_backup(
+        self,
+        name: Optional[str] = None,
+        network: Optional[str] = None,
+        compatibility: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         """Create a wallet backup.
         
         Args:
@@ -52,13 +58,18 @@ class WalletBackup:
             
             # Copy wallet file
             shutil.copy2(self.wallet_path, backup_file)
+            wallet_sha256 = hashlib.sha256(backup_file.read_bytes()).hexdigest()
             
             # Create metadata
             metadata = {
                 'name': name,
                 'created_at': int(time.time()),
                 'source': str(self.wallet_path),
-                'size': self.wallet_path.stat().st_size
+                'size': self.wallet_path.stat().st_size,
+                'sha256': wallet_sha256,
+                'network': network or "",
+                'wallet_format': 'berzcoin.wallet.v1',
+                'compatibility': compatibility or {},
             }
             
             metadata_file = self.backup_dir / f"{name}.meta"
@@ -72,7 +83,7 @@ class WalletBackup:
             logger.error(f"Failed to create backup: {e}")
             return None
     
-    def restore_backup(self, backup_name: str) -> bool:
+    def restore_backup(self, backup_name: str, expected_network: Optional[str] = None) -> bool:
         """Restore wallet from backup.
         
         Args:
@@ -88,6 +99,26 @@ class WalletBackup:
             return False
         
         try:
+            metadata_file = self.backup_dir / f"{backup_name}.meta"
+            metadata: Dict[str, Any] = {}
+            if metadata_file.exists():
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+            expected_sha = str(metadata.get("sha256", "") or "")
+            if expected_sha:
+                actual_sha = hashlib.sha256(backup_file.read_bytes()).hexdigest()
+                if actual_sha != expected_sha:
+                    logger.error("Backup checksum mismatch for %s", backup_name)
+                    return False
+            backup_network = str(metadata.get("network", "") or "")
+            if expected_network and backup_network and backup_network != expected_network:
+                logger.error(
+                    "Backup network mismatch: backup=%s expected=%s",
+                    backup_network,
+                    expected_network,
+                )
+                return False
+
             # Create backup of current wallet
             if self.wallet_path.exists():
                 current_backup = self.wallet_path.with_suffix('.bak')

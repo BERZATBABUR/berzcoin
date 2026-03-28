@@ -109,13 +109,17 @@ class MempoolHandlers:
         tx_bytes = bytes.fromhex(hex_string.strip())
         tx, _ = Transaction.deserialize(tx_bytes)
 
+        if hasattr(self.node, "on_transaction"):
+            accepted, txid, reason = await self.node.on_transaction(tx, relay=True)
+            if accepted:
+                return txid
+            raise ValueError(f"Transaction rejected: {reason}")
+
         if await self.node.mempool.add_transaction(tx):
             if self.node.connman:
                 inv = InvMessage(inventory=[(InvMessage.InvType.MSG_TX, tx.txid())])
                 await self.node.connman.broadcast('inv', inv.serialize())
-
             return tx.txid().hex()
-
         raise ValueError('Transaction rejected by mempool')
 
     async def test_mempool_accept(self, raw_txs: List[str], max_fee_rate: int = 0) -> List[Dict[str, Any]]:
@@ -158,3 +162,19 @@ class MempoolHandlers:
                 })
 
         return results
+
+    async def submit_package(self, raw_txs: List[str]) -> Dict[str, Any]:
+        """Submit a package of related raw transactions atomically."""
+        if not getattr(self.node, "mempool", None):
+            return {"accepted": False, "reject-reason": "no mempool"}
+        txs: List[Transaction] = []
+        for raw_tx in raw_txs:
+            tx_bytes = bytes.fromhex(raw_tx.strip())
+            tx, _ = Transaction.deserialize(tx_bytes)
+            txs.append(tx)
+        result = await self.node.mempool.add_package(txs)
+        if bool(result.get("accepted")) and self.node.connman and not hasattr(self.node, "on_transaction"):
+            for tx in txs:
+                inv = InvMessage(inventory=[(InvMessage.InvType.MSG_TX, tx.txid())])
+                await self.node.connman.broadcast("inv", inv.serialize())
+        return result

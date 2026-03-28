@@ -12,7 +12,7 @@ class BlockHeader:
     
     def __init__(self, version: int = 1, prev_block_hash: bytes = b'\x00' * 32,
                  merkle_root: bytes = b'\x00' * 32, timestamp: Optional[int] = None,
-                 bits: int = 0x1d00ffff, nonce: int = 0):
+                 bits: int = 0x207fffff, nonce: int = 0):
         """Initialize block header.
         
         Args:
@@ -89,7 +89,8 @@ class BlockHeader:
         Returns:
             True if proof of work is valid
         """
-        block_hash_int = int.from_bytes(self.hash(), 'little')
+        # Compare digest as a 256-bit integer against target.
+        block_hash_int = int.from_bytes(self.hash(), 'big')
         return block_hash_int <= target
     
     def __repr__(self) -> str:

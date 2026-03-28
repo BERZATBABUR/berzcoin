@@ -23,7 +23,6 @@ rpcport=8332
 rpcallowip=127.0.0.1
 disablewallet=false
 mining=false
-require_encrypted_wallet=true
 rpc_require_auth=true
 EOF
 
@@ -47,5 +46,4 @@ echo "  berzcoind -conf ${DATADIR}/berzcoin.conf"
 echo ""
 echo "Notes:"
 echo "  - RPC is bound to localhost; use ${DATADIR}/.cookie for berzcoin-cli (or cookie auth)."
-echo "  - Do not store walletpassphrase in berzcoin.conf; pass at runtime or via env if supported."
-echo "  - Wallet must be created with a password (encrypted wallet)."
+echo "  - Wallet activation is private-key based (activatewallet)."

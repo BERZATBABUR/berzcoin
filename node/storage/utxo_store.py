@@ -21,16 +21,31 @@ class UTXOStore:
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (outpoint, txid, index, value, script_pubkey, height, is_coinbase))
 
-    def spend_utxo(self, txid: str, index: int) -> bool:
+    def spend_utxo(
+        self,
+        txid: str,
+        index: int,
+        spent_by_txid: Optional[str] = None,
+        spent_by_index: Optional[int] = None,
+    ) -> bool:
         outpoint = f"{txid}:{index}"
         result = self.db.execute("DELETE FROM utxo WHERE outpoint = ?", (outpoint,))
         if result.rowcount > 0:
             self.db.execute("""
-                UPDATE outputs SET spent = 1, spent_by_txid = ?
+                UPDATE outputs
+                SET spent = 1,
+                    spent_by_txid = ?,
+                    spent_by_index = ?
                 WHERE txid = ? AND "index" = ?
-            """, (txid, txid, index))
+            """, (spent_by_txid, spent_by_index, txid, index))
             return True
         return False
+
+    def remove_utxo(self, txid: str, index: int) -> bool:
+        """Remove a UTXO entry without marking the origin output as spent."""
+        outpoint = f"{txid}:{index}"
+        result = self.db.execute("DELETE FROM utxo WHERE outpoint = ?", (outpoint,))
+        return result.rowcount > 0
 
     def get_utxo(self, txid: str, index: int) -> Optional[Dict[str, Any]]:
         return self.db.fetch_one("SELECT * FROM utxo WHERE outpoint = ?", (f"{txid}:{index}",))

@@ -73,6 +73,8 @@ class MessageLimits:
             'tx': RateLimiter(max_messages=50, time_window=60),
             'block': RateLimiter(max_messages=10, time_window=60),
             'addr': RateLimiter(max_messages=10, time_window=60),
+            'sendcmpct': RateLimiter(max_messages=4, time_window=60),
+            'cmpctblock': RateLimiter(max_messages=20, time_window=60),
         }
 
     def allow(self, peer_ip: str, command: str) -> bool:

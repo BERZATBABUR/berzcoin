@@ -3,7 +3,7 @@
 import asyncio
 import socket
 import time
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, List
 from shared.protocol.codec import MessageCodec
 from shared.protocol.messages import *
 from shared.protocol.versioning import VersionHandshake, PeerVersion
@@ -14,6 +14,7 @@ logger = get_logger()
 
 class Peer:
     """Peer connection handler."""
+    MAX_PAYLOAD_SIZE = 2_000_000
 
     def __init__(self, host: str, port: int, is_outbound: bool = True):
         self.host = host
@@ -25,20 +26,30 @@ class Peer:
         self.handshake = VersionHandshake()
         self.version: Optional[PeerVersion] = None
         self.connected = False
+        self.connected_at = 0.0
         self.connecting = False
         self.on_message: Optional[Callable] = None
         self.on_disconnect: Optional[Callable] = None
+        self.relay_txs: bool = True
+        self.prefers_compact_blocks: bool = False
+        self.compact_block_version: int = 0
+        self.last_message_at: float = 0.0
 
     async def connect(self) -> bool:
         if self.connecting or self.connected:
             return False
         self.connecting = True
         try:
-            self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
+            self.reader, self.writer = await asyncio.wait_for(
+                asyncio.open_connection(self.host, self.port),
+                timeout=10,
+            )
             if not await self._handshake():
                 await self.disconnect()
                 return False
             self.connected = True
+            self.connected_at = asyncio.get_event_loop().time()
+            self.last_message_at = self.connected_at
             self.connecting = False
             logger.info(f"Connected to {self.host}:{self.port}")
             asyncio.create_task(self._handle_messages())
@@ -52,7 +63,7 @@ class Peer:
         version_msg = self.handshake.create_version()
         await self.send_message("version", version_msg.serialize())
         version_response = await self._wait_for_message("version", timeout=30)
-        if not version_response:
+        if version_response is None:
             logger.error(f"Timeout waiting for version from {self.host}")
             return False
         remote_version, _ = VersionMessage.deserialize(version_response)
@@ -60,30 +71,37 @@ class Peer:
         if not valid:
             logger.error(f"Invalid version from {self.host}: {error}")
             return False
+        self.relay_txs = bool(getattr(remote_version, "relay", True))
         verack_msg = self.handshake.create_verack()
         await self.send_message("verack", verack_msg.serialize())
         verack_response = await self._wait_for_message("verack", timeout=30)
-        if not verack_response:
+        if verack_response is None:
             logger.error(f"Timeout waiting for verack from {self.host}")
             return False
         self.handshake.process_verack()
         self.version = PeerVersion(remote_version)
+        # Negotiate compact block announcements (version 1 envelope for now).
+        await self.send_sendcmpct(announce=True, version=1)
         logger.info(f"Handshake complete with {self.host}")
         return True
 
     async def _wait_for_message(self, command: str, timeout: int = 30) -> Optional[bytes]:
         try:
             while True:
-                header_data = await asyncio.wait_for(self.reader.read(24), timeout)
-                if not header_data:
-                    return None
-                if command in header_data.decode('ascii', errors='ignore'):
-                    payload_len = int.from_bytes(header_data[16:20], 'little')
-                    payload = await self.reader.read(payload_len)
-                    return payload
+                header_data = await asyncio.wait_for(self.reader.readexactly(24), timeout)
                 payload_len = int.from_bytes(header_data[16:20], 'little')
-                await self.reader.read(payload_len)
+                if payload_len > self.MAX_PAYLOAD_SIZE:
+                    logger.warning("Rejecting oversized payload from %s", self.host)
+                    return None
+                cmd = header_data[4:16].split(b"\x00", 1)[0].decode("ascii", errors="ignore")
+                if cmd == command:
+                    payload = await self.reader.readexactly(payload_len)
+                    return payload
+                if payload_len:
+                    await self.reader.readexactly(payload_len)
         except asyncio.TimeoutError:
+            return None
+        except asyncio.IncompleteReadError:
             return None
         except Exception as e:
             logger.error(f"Error waiting for message: {e}")
@@ -92,21 +110,27 @@ class Peer:
     async def _handle_messages(self) -> None:
         try:
             while self.connected:
-                header = await self.reader.read(24)
-                if len(header) < 24:
-                    break
-                command = header[4:16].decode('ascii').strip('')
+                header = await self.reader.readexactly(24)
+                command = header[4:16].split(b"\x00", 1)[0].decode("ascii", errors="ignore")
                 payload_len = int.from_bytes(header[16:20], 'little')
-                payload = await self.reader.read(payload_len)
+                if payload_len > self.MAX_PAYLOAD_SIZE:
+                    logger.warning("Peer %s sent oversized payload (%s)", self.host, payload_len)
+                    break
+                payload = await self.reader.readexactly(payload_len) if payload_len else b""
+                self.last_message_at = asyncio.get_event_loop().time()
                 if self.on_message:
                     await self.on_message(self, command, payload)
+        except asyncio.IncompleteReadError:
+            pass
         except Exception as e:
             logger.error(f"Error handling messages from {self.host}: {e}")
         finally:
             await self.disconnect()
 
     async def send_message(self, command: str, payload: bytes) -> None:
-        if not self.writer or not self.connected:
+        # Handshake messages (version/verack) are sent before `connected=True`,
+        # so only require a live writer here.
+        if not self.writer:
             return
         try:
             encoded = self.codec.encode(command, payload)
@@ -133,7 +157,7 @@ class Peer:
         ping_msg = PingMessage(nonce)
         await self.send_message("ping", ping_msg.serialize())
 
-    async def send_getheaders(self, locator_hashes: List[bytes], hash_stop: bytes = b'' * 32) -> None:
+    async def send_getheaders(self, locator_hashes: List[bytes], hash_stop: bytes = b"\x00" * 32) -> None:
         msg = GetHeadersMessage(block_locator_hashes=locator_hashes, hash_stop=hash_stop)
         await self.send_message("getheaders", msg.serialize())
 
@@ -141,16 +165,23 @@ class Peer:
         msg = GetDataMessage(inventory=[(inv_type, inv_hash)])
         await self.send_message("getdata", msg.serialize())
 
+    async def send_sendcmpct(self, announce: bool = True, version: int = 1) -> None:
+        msg = SendCmpctMessage(announce=announce, version=version)
+        await self.send_message("sendcmpct", msg.serialize())
+
+    async def send_cmpctblock(self, message: CmpctBlockMessage) -> None:
+        await self.send_message("cmpctblock", message.serialize())
+
     async def disconnect(self) -> None:
-        if not self.connected:
-            return
+        was_connected = self.connected
         self.connected = False
         if self.writer:
             self.writer.close()
             await self.writer.wait_closed()
-        if self.on_disconnect:
+        if was_connected and self.on_disconnect:
             await self.on_disconnect(self)
-        logger.info(f"Disconnected from {self.host}:{self.port}")
+        if was_connected:
+            logger.info(f"Disconnected from {self.host}:{self.port}")
 
     @property
     def address(self) -> str:

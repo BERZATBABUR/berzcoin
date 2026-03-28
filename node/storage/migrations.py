@@ -207,3 +207,78 @@ def register_standard_migrations(migrations: Migrations) -> None:
         db.execute("DROP TABLE IF EXISTS tx_index")
 
     migrations.register(6, "Transaction index tables (tx_index, tx_inputs, tx_outputs)", migration_6_up, migration_6_down)
+
+    def migration_7_up(db: Database):
+        # Allow side-branch persistence by removing UNIQUE(height) constraints.
+        db.execute("PRAGMA foreign_keys=OFF")
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS blocks_new (
+                hash TEXT PRIMARY KEY,
+                height INTEGER NOT NULL,
+                version INTEGER NOT NULL,
+                prev_block_hash TEXT NOT NULL,
+                merkle_root TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                bits INTEGER NOT NULL,
+                nonce INTEGER NOT NULL,
+                tx_count INTEGER NOT NULL,
+                size INTEGER NOT NULL,
+                weight INTEGER NOT NULL,
+                is_valid BOOLEAN NOT NULL,
+                processed_at INTEGER NOT NULL
+            )
+        """)
+        db.execute("""
+            INSERT OR REPLACE INTO blocks_new
+            (hash, height, version, prev_block_hash, merkle_root, timestamp, bits, nonce,
+             tx_count, size, weight, is_valid, processed_at)
+            SELECT hash, height, version, prev_block_hash, merkle_root, timestamp, bits, nonce,
+                   tx_count, size, weight, is_valid, processed_at
+            FROM blocks
+        """)
+        db.execute("DROP TABLE blocks")
+        db.execute("ALTER TABLE blocks_new RENAME TO blocks")
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS block_headers_new (
+                hash TEXT PRIMARY KEY,
+                height INTEGER NOT NULL,
+                version INTEGER NOT NULL,
+                prev_block_hash TEXT NOT NULL,
+                merkle_root TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                bits INTEGER NOT NULL,
+                nonce INTEGER NOT NULL,
+                chainwork TEXT NOT NULL,
+                is_valid BOOLEAN NOT NULL
+            )
+        """)
+        db.execute("""
+            INSERT OR REPLACE INTO block_headers_new
+            (hash, height, version, prev_block_hash, merkle_root, timestamp, bits, nonce, chainwork, is_valid)
+            SELECT hash, height, version, prev_block_hash, merkle_root, timestamp, bits, nonce, chainwork, is_valid
+            FROM block_headers
+        """)
+        db.execute("DROP TABLE block_headers")
+        db.execute("ALTER TABLE block_headers_new RENAME TO block_headers")
+
+        db.execute("CREATE INDEX IF NOT EXISTS idx_blocks_height ON blocks(height)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_blocks_hash ON blocks(hash)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_blocks_prev_hash ON blocks(prev_block_hash)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_blocks_timestamp ON blocks(timestamp)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_block_headers_height ON block_headers(height)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_block_headers_prev_hash ON block_headers(prev_block_hash)")
+
+        db.execute("PRAGMA foreign_keys=ON")
+
+    def migration_7_down(db: Database):
+        # Not safely reversible without potentially dropping side-branch data.
+        pass
+
+    migrations.register(
+        7,
+        "Allow non-unique block heights for fork branch persistence",
+        migration_7_up,
+        migration_7_down,
+    )

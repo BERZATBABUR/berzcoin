@@ -29,18 +29,42 @@ class Reindexer:
     ) -> bool:
         self.is_reindexing = True
         try:
-            logger.info("Clearing UTXO set for reindex (in-process)...")
-            self.utxo_store.db.execute("DELETE FROM utxo")
-
             if end_height is None:
                 end_height = self.chainstate.get_best_height()
+            if end_height < 0:
+                logger.warning("No blocks available for reindex")
+                return False
+            if start_height != 0:
+                logger.warning(
+                    "Partial reindex requested (%s..%s); forcing full replay from genesis for deterministic recovery",
+                    start_height,
+                    end_height,
+                )
+                start_height = 0
 
             logger.info("Reindexing blocks %s to %s", start_height, end_height)
 
-            for height in range(start_height, end_height + 1):
-                await self._reindex_block(height)
-                if height % 1000 == 0:
-                    logger.info("Reindexed %s blocks", height)
+            with self.utxo_store.db.transaction():
+                logger.info("Clearing UTXO set for reindex (transactional rebuild)...")
+                self.utxo_store.db.execute("DELETE FROM utxo")
+                # Rebuild spent markers from scratch as part of deterministic replay.
+                self.utxo_store.db.execute("""
+                    UPDATE outputs
+                    SET spent = 0, spent_by_txid = NULL, spent_by_index = NULL
+                """)
+
+                for height in range(start_height, end_height + 1):
+                    block = self.chainstate.get_block_by_height(height)
+                    if not block:
+                        raise RuntimeError(
+                            f"Missing main-chain block at height {height} during reindex"
+                        )
+                    await self._reindex_block(block, height)
+                    if height % 1000 == 0:
+                        logger.info("Reindexed %s blocks", height)
+
+            if not self.utxo_store.verify_consistency():
+                raise RuntimeError("UTXO consistency check failed after reindex")
 
             logger.info("Reindexing completed at height %s", end_height)
             return True
@@ -50,16 +74,21 @@ class Reindexer:
         finally:
             self.is_reindexing = False
 
-    async def _reindex_block(self, height: int) -> None:
-        block = self.blocks_store.read_block(height)
-        if not block:
-            logger.warning("Block %s not found", height)
-            return
-
+    async def _reindex_block(self, block, height: int) -> None:
         for tx in block.transactions:
             if not tx.is_coinbase():
-                for txin in tx.vin:
-                    self.utxo_store.spend_utxo(txin.prev_tx_hash.hex(), txin.prev_tx_index)
+                for in_idx, txin in enumerate(tx.vin):
+                    spent = self.utxo_store.spend_utxo(
+                        txin.prev_tx_hash.hex(),
+                        txin.prev_tx_index,
+                        spent_by_txid=tx.txid().hex(),
+                        spent_by_index=in_idx,
+                    )
+                    if not spent:
+                        raise RuntimeError(
+                            f"Failed to spend outpoint {txin.prev_tx_hash.hex()}:{txin.prev_tx_index} "
+                            f"while replaying block {height}"
+                        )
 
             for i, txout in enumerate(tx.vout):
                 if txout.script_pubkey and txout.script_pubkey[0] == 0x6A:

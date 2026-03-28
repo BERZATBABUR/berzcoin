@@ -1,0 +1,47 @@
+# Testnet runtime profile (INI-style; loaded by ConfigParser despite .toml extension).
+
+[main]
+network = testnet
+
+# Storage
+datadir = ~/.berzcoin
+
+# P2P
+bind = 0.0.0.0
+port = 18333
+maxconnections = 64
+maxoutbound = 8
+
+# Discovery
+bootstrap_enabled = true
+bootstrap_file = bootstrap_nodes.json
+dnsseed = true
+# provide testnet seed hostnames for your network
+dnsseeds = testnet-seed1.berzcoin.org,testnet-seed2.berzcoin.org
+addnode =
+connect =
+
+# RPC
+rpcbind = 127.0.0.1
+rpcport = 18332
+rpcallowip = 127.0.0.1
+rpcthreads = 2
+rpcworkqueue = 8
+rpctimeout = 30
+rpc_require_auth = true
+
+# Wallet
+wallet = default
+disablewallet = false
+wallet_private_key =
+
+# Mining
+mining = false
+autominer = false
+miningaddress =
+mining_threads = 1
+
+# Services
+webdashboard = false
+webhost = 127.0.0.1
+webport = 18080

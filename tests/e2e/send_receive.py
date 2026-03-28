@@ -16,8 +16,6 @@ from node.app.modes import ModeManager
 class TestSendReceive(unittest.TestCase):
     """Test wallet flows with a temporary node."""
 
-    _WALLET_PW = "e2e_test_wallet_pw"
-
     def setUp(self) -> None:
         self.temp_dir = tempfile.mkdtemp()
         wallets = os.path.join(self.temp_dir, "wallets")
@@ -28,7 +26,7 @@ class TestSendReceive(unittest.TestCase):
         self.node.config.set("network", "regtest")
         self.node.config.set("disablewallet", False)
         self.node.config.set("wallet", "test_wallet")
-        self.node.config.set("walletpassphrase", self._WALLET_PW)
+        self.node.config.set("wallet_private_key", "")
         self.node.mode_manager = ModeManager(self.node.config)
         self.node.network = self.node.config.get("network", "regtest")
 
@@ -39,10 +37,10 @@ class TestSendReceive(unittest.TestCase):
         async def run_test() -> None:
             ok = await self.node.initialize()
             self.assertTrue(ok)
-            self.assertIsNotNone(self.node.wallet)
-            self.assertTrue(self.node.wallet.is_loaded)
-            self.assertTrue(self.node.wallet.unlock(self._WALLET_PW))
-            address = self.node.wallet.get_new_address()
+            self.assertIsNotNone(self.node.simple_wallet_manager)
+            wallet = self.node.simple_wallet_manager.create_wallet()
+            self.node.simple_wallet_manager.activate_wallet(wallet.private_key_hex)
+            address = wallet.address
             self.assertIsNotNone(address)
             self.assertGreater(len(address or ""), 8)
             if self.node.db:
@@ -53,8 +51,10 @@ class TestSendReceive(unittest.TestCase):
     def test_get_balance(self) -> None:
         async def run_test() -> None:
             self.assertTrue(await self.node.initialize())
-            self.assertTrue(self.node.wallet.unlock(self._WALLET_PW))
-            balance = self.node.wallet.get_balance()
+            self.assertIsNotNone(self.node.simple_wallet_manager)
+            wallet = self.node.simple_wallet_manager.create_wallet()
+            self.node.simple_wallet_manager.activate_wallet(wallet.private_key_hex)
+            balance = self.node.simple_wallet_manager.get_balance(self.node.chainstate)
             self.assertIsInstance(balance, int)
             self.assertEqual(balance, 0)
             if self.node.db:
@@ -65,9 +65,11 @@ class TestSendReceive(unittest.TestCase):
     def test_address_generation(self) -> None:
         async def run_test() -> None:
             self.assertTrue(await self.node.initialize())
-            self.assertTrue(self.node.wallet.unlock(self._WALLET_PW))
-            address1 = self.node.wallet.get_new_address()
-            address2 = self.node.wallet.get_new_address()
+            self.assertIsNotNone(self.node.simple_wallet_manager)
+            wallet1 = self.node.simple_wallet_manager.create_wallet()
+            wallet2 = self.node.simple_wallet_manager.create_wallet()
+            address1 = wallet1.address
+            address2 = wallet2.address
             self.assertIsNotNone(address1)
             self.assertIsNotNone(address2)
             if address1 == address2:

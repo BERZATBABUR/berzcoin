@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regtest one-command mining: creates datadir, conf, starts node, unlocks wallet,
+# Regtest one-command mining: creates datadir, conf, starts node, activates wallet,
 # sets a real mining address, starts one CPU mining thread.
 
 set -euo pipefail
@@ -11,9 +11,6 @@ DATADIR="${BERZCOIN_EASY_DATADIR:-${HOME}/.berzcoin-easy-mine}"
 CONF="${DATADIR}/berzcoin.conf"
 RPC_PORT=18443
 P2P_PORT=18444
-WALLET_NAME="miner_wallet"
-WALLET_PASS="$(openssl rand -hex 16)"
-
 rpc_password() {
   local line
   line="$(grep '^berzcoin:' "${DATADIR}/.cookie" 2>/dev/null | head -1 || true)"
@@ -67,8 +64,6 @@ port = ${P2P_PORT}
 rpcbind = 127.0.0.1
 rpcport = ${RPC_PORT}
 rpcallowip = 127.0.0.1
-wallet = ${WALLET_NAME}
-walletpassphrase = ${WALLET_PASS}
 mining = true
 autominer = false
 miningaddress =
@@ -89,8 +84,7 @@ else
   echo "[*] Using repo interpreter (install with: pip install -e ${REPO_ROOT})"
 fi
 
-echo "[*] Wallet passphrase (saved only in ${CONF}; chmod 600):"
-echo "    ${WALLET_PASS}"
+echo "[*] Mining flow uses private-key wallet activation (no unlock step)."
 echo ""
 
 echo "[*] Starting berzcoind..."
@@ -101,8 +95,14 @@ if ! wait_for_rpc; then
   exit 1
 fi
 
-echo "[*] Unlocking wallet..."
-rpc_cli unlockwallet "${WALLET_PASS}" --timeout 86400
+echo "[*] Creating private-key wallet and activating it..."
+WALLET_JSON="$(rpc_cli createwallet default | tr -d '\r')"
+WALLET_KEY="$(echo "${WALLET_JSON}" | sed -n 's/.*"private_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+if [[ -z "${WALLET_KEY}" ]]; then
+  echo "error: createwallet did not return private key" >&2
+  exit 1
+fi
+rpc_cli activatewallet "${WALLET_KEY}"
 
 echo "[*] Getting coinbase address..."
 ADDR="$(rpc_cli getnewaddress | tail -1 | tr -d '\r')"

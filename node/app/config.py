@@ -39,15 +39,34 @@ class Config:
         "mempoolminfee": 1000,
         "wallet": "default",
         "disablewallet": False,
-        "walletpassphrase": "",
+        "wallet_private_key": "",
         "mining": False,
         "miningaddress": "",
         "autominer": False,
         "mining_threads": 1,
+        # Coinbase spend maturity (confirmations). Keep 100 by default;
+        # local v1 launcher can override for faster regtest demos.
+        "coinbase_maturity": 100,
+        # When true, miner is forced to stop/start only for the active wallet address.
+        "mining_require_wallet_match": True,
+        # Optional runtime mining pacing override (seconds per block).
+        # 0 means "use consensus default for current network".
+        "mining_target_time_secs": 0,
         "debug": False,
         "logfile": "debug.log",
         "maxconnections": 125,
         "maxoutbound": 8,
+        # Sync / performance tuning knobs.
+        "sync_poll_interval_secs": 30,
+        "sync_error_backoff_secs": 60,
+        "sync_getdata_batch_size": 128,
+        "sync_block_request_timeout_secs": 30,
+        "blocks_cache_size": 100,
+        # Health / readiness thresholds.
+        "health_sync_lag_warn_blocks": 24,
+        "health_sync_lag_critical_blocks": 144,
+        "health_min_peers_warn": 1,
+        "health_max_mempool_txs_warn": 200000,
         "blocksonly": False,
         "lightwallet": False,
         "filterport": 8334,
@@ -56,13 +75,14 @@ class Config:
         "dnsseeds": [],
         "addnode": [],
         "connect": [],
+        "authority_chain_enabled": False,
+        "authority_trusted_nodes": [],
         "bootstrap_file": "bootstrap_nodes.json",
         "bootstrap_enabled": True,
         "webdashboard": False,
         "webhost": "127.0.0.1",
         "webport": 8080,
         "web_require_auth": False,
-        "require_encrypted_wallet": True,
         "rpc_require_auth": True,
         "disable_ip_discovery": False,
         # Operator safety: refuse to start a public-facing node when no
@@ -196,10 +216,15 @@ class Config:
     def get_network_params(self) -> ConsensusParams:
         network = self.config["network"]
         if network == "mainnet":
-            return ConsensusParams.mainnet()
-        if network == "testnet":
-            return ConsensusParams.testnet()
-        return ConsensusParams.regtest()
+            params = ConsensusParams.mainnet()
+        elif network == "testnet":
+            params = ConsensusParams.testnet()
+        else:
+            params = ConsensusParams.regtest()
+
+        maturity = int(self.config.get("coinbase_maturity", getattr(params, "coinbase_maturity", 100)) or 0)
+        setattr(params, "coinbase_maturity", max(0, maturity))
+        return params
 
     def validate(self) -> bool:
         datadir = self.get_datadir()

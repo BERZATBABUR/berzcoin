@@ -2,7 +2,8 @@
 
 import asyncio
 from typing import Optional
-from ...shared.utils.logging import get_logger
+from shared.utils.logging import get_logger
+from .reindex import Reindexer
 
 logger = get_logger()
 
@@ -17,8 +18,8 @@ class NodeBootstrap:
         self.utxo_store = utxo_store
         self.syncing = False
 
-    async def sync_full_chain(self) -> bool:
-        """Sync full blockchain from peers."""
+    async def sync_full_chain(self, replay_rebuild: bool = True) -> bool:
+        """Sync full blockchain from peers and replay chain to rebuild UTXO."""
         if self.syncing:
             return False
 
@@ -30,6 +31,8 @@ class NodeBootstrap:
             best_peer = self.p2p_manager.get_best_height_peer()
             if not best_peer:
                 logger.warning("No peers available for sync")
+                if replay_rebuild:
+                    return await self.replay_chain_and_rebuild_utxo()
                 return False
 
             target_height = best_peer.peer_height
@@ -42,6 +45,11 @@ class NodeBootstrap:
 
             # Download and verify blocks
             await self._sync_blocks(best_peer, current_height, target_height)
+
+            if replay_rebuild:
+                rebuilt = await self.replay_chain_and_rebuild_utxo()
+                if not rebuilt:
+                    return False
 
             # Final verification
             await self._verify_chain()
@@ -67,9 +75,9 @@ class NodeBootstrap:
 
         for height in range(start_height + 1, end_height + 1):
             # Request block
-            block_hash = self.chainstate.header_chain.get_header(height)
-            if block_hash:
-                await peer.send_getdata(InvMessage.InvType.MSG_BLOCK, block_hash.hash())
+            header = self.chainstate.get_header(height)
+            if header:
+                await peer.send_getdata(InvMessage.InvType.MSG_BLOCK, header.hash())
 
             # Small delay to avoid overwhelming peer
             await asyncio.sleep(0.01)
@@ -87,6 +95,16 @@ class NodeBootstrap:
             logger.info("UTXO set verification passed")
         else:
             logger.error("UTXO set verification failed!")
+
+    async def replay_chain_and_rebuild_utxo(self) -> bool:
+        """Replay local chain from genesis and rebuild UTXO state deterministically."""
+        best_height = int(self.chainstate.get_best_height())
+        if best_height < 0:
+            logger.warning("No blocks available for replay")
+            return False
+        logger.info("Replaying chain from genesis to height %s for UTXO rebuild", best_height)
+        reindexer = Reindexer(self.chainstate, self.chainstate.blocks_store, self.utxo_store)
+        return await reindexer.run(0, best_height)
 
     def get_progress(self) -> dict:
         """Get sync progress."""

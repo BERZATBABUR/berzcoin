@@ -138,10 +138,22 @@ class AddrMan:
 
     def get_addresses(self, count: int = 10) -> List[str]:
         addresses = []
+        # Always prioritize explicitly configured static peers (addnode/connect).
+        # These are operator-selected and should be retried promptly even when a
+        # prior attempt failed during startup ordering races.
+        for addr in list(self.static_peers):
+            if addr in self.addresses and addr not in addresses:
+                addresses.append(addr)
+                if len(addresses) >= count:
+                    return addresses
+
         tried_list = [(addr, self.addresses[addr]) for addr in self.tried_addresses if self.addresses[addr].should_retry]
         tried_list.sort(key=lambda x: x[1].success_rate, reverse=True)
         for addr, _ in tried_list[:count]:
-            addresses.append(addr)
+            if addr not in addresses:
+                addresses.append(addr)
+                if len(addresses) >= count:
+                    return addresses
         if len(addresses) < count:
             new_list = [addr for addr in self.new_addresses if self.addresses[addr].should_retry]
             random.shuffle(new_list)

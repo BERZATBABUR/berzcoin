@@ -134,44 +134,11 @@ class BerzCoinCLI:
         if args.command == 'listwallets':
             return await handler.wallet.list_wallets()
         if args.command == 'loadwallet':
-            return await handler.wallet.load_wallet(args.filename, getattr(args, 'password', None))
+            return await handler.wallet.load_wallet(args.private_key)
         if args.command == 'createwallet':
-            return await handler.wallet.create_wallet(args.name, getattr(args, 'password', None))
-        if args.command == 'unloadwallet':
-            return await handler.wallet.unload_wallet()
-        if args.command == 'backupwallet':
-            return await handler.wallet.backup_wallet(getattr(args, 'destination', None))
-        if args.command == 'restorewallet':
-            return await handler.wallet.restore_wallet(args.backup)
-        if args.command == 'listbackups':
-            return await handler.wallet.list_backups()
-        if args.command == 'getwalletaddresses':
-            return await handler.wallet.get_wallet_addresses(
-                getattr(args, 'account', None),
-                getattr(args, 'include_used', True),
-            )
-        if args.command == 'getwalletutxos':
-            return await handler.wallet.get_wallet_utxos(
-                getattr(args, 'address', None),
-                getattr(args, 'minconf', 1),
-            )
-        if args.command == 'getwallettransactions':
-            return await handler.wallet.get_wallet_transactions(
-                getattr(args, 'count', 100),
-                getattr(args, 'skip', 0),
-            )
-        if args.command == 'setwalletlabel':
-            return await handler.wallet.set_wallet_label(args.address, args.label)
-        if args.command == 'lockwallet':
-            return await handler.wallet.lock_wallet()
-        if args.command == 'unlockwallet':
-            return await handler.wallet.unlock_wallet(args.password, getattr(args, 'timeout', 0))
-        if args.command == 'getwalletaccounts':
-            return await handler.wallet.get_wallet_accounts()
-        if args.command == 'createaccount':
-            return await handler.wallet.create_account(args.name)
-        if args.command == 'getwalletsummary':
-            return await handler.wallet.get_wallet_summary()
+            return await handler.wallet.create_wallet(args.name)
+        if args.command == 'activatewallet':
+            return await handler.wallet.activate_wallet(args.private_key)
 
         if args.command == 'getmininginfo':
             return await handler.mining.get_mining_info()
@@ -194,10 +161,6 @@ class BerzCoinCLI:
             return await handler.mining.get_mining_status()
         if args.command == 'setminingaddress':
             return await handler.mining.set_mining_address(args.address)
-        if args.command == 'getminingworkers':
-            return await handler.mining.get_mining_workers()
-        if args.command == 'setminingdifficulty':
-            return await handler.mining.set_mining_difficulty(args.difficulty)
 
         if args.command == 'getinfo':
             return await handler.control.get_info()

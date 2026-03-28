@@ -1,0 +1,12 @@
+{
+  "_comment": "BerzCoin testnet genesis metadata (must match shared/consensus/params.py).",
+  "network": "testnet",
+  "version": 1,
+  "prev_block_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "merkle_root": "50e9ba90db5c87178f43191d5d39f048593789a3f167b59b14887626479a5dbb",
+  "timestamp": 1774569660,
+  "bits": "0x207fffff",
+  "nonce": 17146,
+  "hash": "0000a21d5c6616e56712e4e80ab1a3fb8d859bc386a54bf8e3cb3e104c96726f",
+  "message_magic_hex": "cee2caff"
+}

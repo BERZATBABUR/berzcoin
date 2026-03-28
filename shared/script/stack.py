@@ -35,6 +35,9 @@ class Stack:
     def clear(self) -> None:
         self._items.clear()
 
+    def clear_altstack(self) -> None:
+        self._altstack.clear()
+
     def to_altstack(self) -> bool:
         item = self.pop()
         if item is None:
@@ -151,6 +154,9 @@ class Stack:
 
     def depth(self) -> int:
         return len(self._items)
+
+    def altstack_size(self) -> int:
+        return len(self._altstack)
 
     def get_items(self) -> List[bytes]:
         return self._items.copy()

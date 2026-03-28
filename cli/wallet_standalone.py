@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""
-BerzCoin wallet helper: local encrypted wallet creation + remote RPC wallet calls.
+"""BerzCoin wallet helper: local simple-wallet create + remote RPC wallet calls.
 
 This is not full SPV: balance / send / newaddress talk to a full node's JSON-RPC
-(the node's loaded wallet). Local ``create`` only writes an encrypted wallet file
-and mnemonic under ~/.berzcoin_wallet/ for backup or future offline signing.
+(the node's active private-key wallet). Local ``create`` writes a simple wallet
+JSON file under ~/.berzcoin_wallet/ for backup/offline use.
 
 RPC auth: user ``berzcoin`` + cookie (see --rpc-cookie-file) or --rpc-password.
-Wallet --password is only used for local ``create`` (file encryption).
 """
 
 from __future__ import annotations
@@ -16,6 +14,7 @@ import argparse
 import base64
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -114,14 +113,16 @@ class StandaloneWallet:
         self.rpc_user = rpc_user
         self.rpc_password = rpc_password
 
-    def create(self, password: str) -> str:
-        """Create a new encrypted wallet on disk (local only)."""
-        from node.wallet.core.wallet import Wallet
+    def create(self) -> dict:
+        """Create a new simple private-key wallet on disk (local only)."""
+        from node.wallet.simple_wallet import SimpleWallet
 
         self.wallet_file.parent.mkdir(parents=True, exist_ok=True)
-        w = Wallet(str(self.wallet_file), self.network)
-        mnemonic = w.create(password)
-        return mnemonic
+        wallet = SimpleWallet.create(network=self.network)
+        payload = wallet.to_dict()
+        payload["created_at"] = int(time.time())
+        self.wallet_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return payload
 
     def get_balance(self) -> float:
         """Query balance from the remote node's wallet (RPC ``get_balance``)."""
@@ -175,10 +176,6 @@ def main() -> None:
         help="Remote node host:port for RPC (default 127.0.0.1:8332)",
     )
     parser.add_argument(
-        "--password",
-        help="Wallet encryption password (required for create only)",
-    )
-    parser.add_argument(
         "--rpc-user",
         default=DEFAULT_RPC_USER,
         help="RPC HTTP Basic user (default berzcoin)",
@@ -216,13 +213,13 @@ def main() -> None:
     )
 
     if args.command == "create":
-        if not args.password:
-            print("[!] Password required for wallet creation (--password).", file=sys.stderr)
-            sys.exit(1)
         w = StandaloneWallet(wallet_path, network=args.network, node_rpc=args.node)
-        mnemonic = w.create(args.password)
-        print(f"[OK] Encrypted wallet: {wallet_path}")
-        print(f"[!!] Mnemonic (store safely): {mnemonic}")
+        created = w.create()
+        print(f"[OK] Wallet file: {wallet_path}")
+        print(f"Address: {created.get('address')}")
+        print(f"Public key: {created.get('public_key')}")
+        print(f"Private key: {created.get('private_key')}")
+        print(f"Mnemonic: {created.get('mnemonic')}")
         return
 
     rpc_pw = resolve_rpc_password(args)

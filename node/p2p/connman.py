@@ -2,12 +2,16 @@
 
 import asyncio
 import random
+import ipaddress
+import time
 from typing import Any, List, Dict, Set, Optional, Callable
 from pathlib import Path
 from shared.utils.logging import get_logger
 from .peer import Peer
 from .addrman import AddrMan
 from .dns_seeds import DNSSeeds
+from .authority import NodeAuthorityChain
+from .peer_scoring import PeerScoringManager
 
 logger = get_logger()
 
@@ -40,6 +44,44 @@ class ConnectionManager:
         self._discover_task: Optional[asyncio.Task] = None
         self._peer_discover_interval_secs = 300
         self._server: Optional[asyncio.base_events.Server] = None
+        self.max_inbound_per_ip = 8
+        self.max_inbound_per_netgroup = 16
+        self.max_outbound_per_netgroup = 2
+        self.min_outbound_netgroups = 4
+        self.peer_scores = PeerScoringManager()
+        self.authority_chain_enabled = bool(
+            self.node_config.get("authority_chain_enabled", False)
+        ) if self.node_config else False
+        trusted = self.node_config.get("authority_trusted_nodes", []) if self.node_config else []
+        self.authority_chain = NodeAuthorityChain(trusted_nodes=trusted)
+        self._last_getaddr_at: Dict[str, float] = {}
+        self._getaddr_interval_secs = 180
+
+    @staticmethod
+    def _split_host_port(address: str, default_port: int) -> tuple[str, int]:
+        raw = (address or "").strip()
+        if not raw:
+            return "", int(default_port)
+        if raw.startswith("["):
+            end = raw.find("]")
+            if end > 0:
+                host = raw[1:end]
+                if len(raw) > end + 2 and raw[end + 1] == ":":
+                    try:
+                        return host, int(raw[end + 2 :])
+                    except ValueError:
+                        return host, int(default_port)
+                return host, int(default_port)
+        if raw.count(":") > 1:
+            # Treat plain IPv6 literal without explicit port as host-only.
+            return raw, int(default_port)
+        if ":" in raw:
+            host, port = raw.rsplit(":", 1)
+            try:
+                return host, int(port)
+            except ValueError:
+                return host, int(default_port)
+        return raw, int(default_port)
 
     def _default_p2p_port(self) -> int:
         if self.node_config:
@@ -178,9 +220,28 @@ class ConnectionManager:
         if self.connect_only:
             return
 
-        for peer in list(self.peers.values()):
+        # Query a random subset for address relay to reduce amplification/spam surface.
+        candidates = [p for p in self.peers.values() if p.connected]
+        random.shuffle(candidates)
+        seen_groups: Set[str] = set()
+        selected: List[Peer] = []
+        for peer in candidates:
+            group = self._netgroup_for_address(peer.address)
+            if group in seen_groups:
+                continue
+            seen_groups.add(group)
+            selected.append(peer)
+            if len(selected) >= 2:
+                break
+
+        for peer in selected:
             if peer.connected:
+                now = asyncio.get_event_loop().time()
+                last = self._last_getaddr_at.get(peer.address, 0.0)
+                if now - last < self._getaddr_interval_secs:
+                    continue
                 await peer.send_getaddr()
+                self._last_getaddr_at[peer.address] = now
 
     async def _maintain_connections(self) -> None:
         while self._running:
@@ -188,6 +249,7 @@ class ConnectionManager:
                 needed = self.max_outbound - len(self.outbound_peers)
                 if needed > 0:
                     await self._connect_outbound(needed)
+                await self._evict_bad_outbound()
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
                 break
@@ -204,20 +266,38 @@ class ConnectionManager:
                     addresses.append(seed)
         random.shuffle(addresses)
         connected = 0
+        netgroup_counts = self._outbound_netgroup_counts()
         for addr in addresses:
             if connected >= count:
                 break
             if addr in self.peers:
                 continue
+            netgroup = self._netgroup_for_address(addr)
+            if netgroup and netgroup_counts.get(netgroup, 0) >= self.max_outbound_per_netgroup:
+                continue
+            score = self.peer_scores.get_score(addr)
+            if not score.should_connect():
+                continue
             default_port = self._default_p2p_port()
-            host, port = addr.split(":") if ":" in addr else (addr, default_port)
+            host, port = self._split_host_port(addr, default_port)
+            if not host:
+                continue
             peer = Peer(host, int(port), is_outbound=True)
             peer.on_message = self.on_message
             peer.on_disconnect = self._on_peer_disconnect
             if await peer.connect():
                 self._add_peer(peer)
+                self.peer_scores.record_good(peer.address)
+                self.addrman.mark_good(peer.address)
+                if self.authority_chain_enabled:
+                    self.authority_chain.verify_from_local(peer.address)
+                if netgroup:
+                    netgroup_counts[netgroup] = netgroup_counts.get(netgroup, 0) + 1
                 connected += 1
                 logger.info(f"Connected to {peer.address}")
+            else:
+                self.peer_scores.record_bad(addr, "connect_failed")
+                self.addrman.mark_failed(addr)
 
     def _add_peer(self, peer: Peer) -> None:
         self.peers[peer.address] = peer
@@ -239,10 +319,48 @@ class ConnectionManager:
     async def accept_connection(self, reader: asyncio.StreamReader,
                                 writer: asyncio.StreamWriter) -> None:
         if len(self.peers) >= self.max_connections:
+            peername = writer.get_extra_info('peername')
+            inbound_addr = ""
+            if peername and len(peername) >= 2:
+                inbound_addr = f"{peername[0]}:{int(peername[1])}"
+            if not await self._evict_worst_inbound_for(inbound_addr):
+                writer.close()
+                await writer.wait_closed()
+                return
+        peername = writer.get_extra_info('peername')
+        if not peername or len(peername) < 2:
             writer.close()
             await writer.wait_closed()
             return
-        host, port = writer.get_extra_info('peername')
+        host, port = peername[0], int(peername[1])
+        inbound_addr = f"{host}:{port}"
+        if self.authority_chain_enabled:
+            if not self.authority_chain.can_accept(inbound_addr, self.peers.keys()):
+                logger.warning("Rejecting inbound %s: no trusted verifier available", inbound_addr)
+                writer.close()
+                await writer.wait_closed()
+                return
+        if not self.peer_scores.get_score(inbound_addr).should_connect():
+            writer.close()
+            await writer.wait_closed()
+            return
+        inbound_from_ip = sum(1 for p in self.inbound_peers.values() if p.host == host)
+        if inbound_from_ip >= self.max_inbound_per_ip:
+            logger.warning("Rejecting inbound from %s: per-IP limit reached", host)
+            writer.close()
+            await writer.wait_closed()
+            return
+        inbound_netgroup = self._netgroup_for_address(inbound_addr)
+        if inbound_netgroup:
+            inbound_same_group = sum(
+                1 for p in self.inbound_peers.values()
+                if self._netgroup_for_address(p.address) == inbound_netgroup
+            )
+            if inbound_same_group >= self.max_inbound_per_netgroup:
+                logger.warning("Rejecting inbound from %s: netgroup limit reached", inbound_addr)
+                writer.close()
+                await writer.wait_closed()
+                return
         peer_addr = f"{host}:{port}"
         if peer_addr in self.peers:
             writer.close()
@@ -253,12 +371,175 @@ class ConnectionManager:
         peer.on_message = self.on_message
         peer.on_disconnect = self._on_peer_disconnect
         if not await peer._handshake():
+            self.peer_scores.record_bad(peer.address, "handshake_failed")
             await peer.disconnect()
             return
         peer.connected = True
+        peer.connected_at = asyncio.get_event_loop().time()
         self._add_peer(peer)
+        self.peer_scores.record_good(peer.address)
+        if self.authority_chain_enabled:
+            verifier = self.authority_chain.verify_with_connected_verifier(
+                peer.address,
+                self.peers.keys(),
+            )
+            if verifier is None:
+                # Fallback to local verification for admitted inbound nodes.
+                self.authority_chain.verify_from_local(peer.address)
+                verifier = "local"
+            logger.info("Authority-chain verified inbound node %s via %s", peer.address, verifier)
         asyncio.create_task(peer._handle_messages())
         logger.info(f"Inbound connection from {peer.address}")
+
+    async def _evict_bad_outbound(self) -> None:
+        if not self.outbound_peers:
+            return
+        worst = self._select_outbound_eviction_candidate()
+        if not worst:
+            return
+        try:
+            await worst.disconnect()
+            self.peer_scores.record_bad(worst.address, "stale_peer")
+        except Exception:
+            pass
+
+    def _protected_outbound_addresses(self) -> Set[str]:
+        """Protect at least one high-quality outbound peer per netgroup."""
+        grouped: Dict[str, List[Peer]] = {}
+        for peer in self.outbound_peers.values():
+            group = self._netgroup_for_address(peer.address)
+            grouped.setdefault(group, []).append(peer)
+
+        protected: Set[str] = set()
+        for peers in grouped.values():
+            best = max(
+                peers,
+                key=lambda p: (
+                    self.peer_scores.get_score(p.address).score,
+                    getattr(p, "connected_at", 0.0),
+                ),
+            )
+            protected.add(best.address)
+
+        # Keep some long-lived anchors even when many peers share netgroups.
+        if len(protected) < self.min_outbound_netgroups:
+            by_uptime = sorted(
+                self.outbound_peers.values(),
+                key=lambda p: getattr(p, "connected_at", 0.0),
+            )
+            for peer in by_uptime:
+                protected.add(peer.address)
+                if len(protected) >= self.min_outbound_netgroups:
+                    break
+        return protected
+
+    def _select_outbound_eviction_candidate(self) -> Optional[Peer]:
+        candidates = [
+            p for p in self.outbound_peers.values() if self.peer_scores.should_evict(p.address)
+        ]
+        if not candidates:
+            return None
+        protected = self._protected_outbound_addresses()
+        unprotected = [p for p in candidates if p.address not in protected]
+        pool = unprotected if unprotected else candidates
+        return min(
+            pool,
+            key=lambda p: (
+                self.peer_scores.get_score(p.address).score,
+                getattr(p, "connected_at", 0.0),
+            ),
+        )
+
+    def filter_and_add_addrs(self, source_peer: Optional[str], addrs: List[str]) -> int:
+        """Validate/limit relayed addrs before adding to AddrMan."""
+        added = 0
+        unique: Set[str] = set()
+        max_accept = 1000
+        per_netgroup_cap = 64
+        netgroup_seen: Dict[str, int] = {}
+        for addr in addrs[:max_accept]:
+            if addr in unique:
+                continue
+            unique.add(addr)
+            host, _port = self._split_host_port(addr, self._default_p2p_port())
+            if not host:
+                continue
+            try:
+                ip = ipaddress.ip_address(host)
+                if not ip.is_global:
+                    continue
+            except ValueError:
+                # Ignore malformed/non-IP relay addresses in this hardened mode.
+                continue
+            netgroup = self._netgroup_for_address(addr)
+            if netgroup_seen.get(netgroup, 0) >= per_netgroup_cap:
+                continue
+            netgroup_seen[netgroup] = netgroup_seen.get(netgroup, 0) + 1
+            if self.peer_scores.get_score(addr).is_banned():
+                continue
+            if self.addrman.add(addr):
+                added += 1
+        if source_peer and len(addrs) > max_accept:
+            self.peer_scores.record_bad(source_peer, "addr_spam")
+        return added
+
+    def _netgroup_for_address(self, address: str) -> str:
+        host, _port = self._split_host_port(address, self._default_p2p_port())
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            return host
+        if isinstance(ip, ipaddress.IPv4Address):
+            parts = host.split(".")
+            return ".".join(parts[:2])
+        return str(ipaddress.IPv6Address(int(ip) >> 64 << 64))
+
+    def _outbound_netgroup_counts(self) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for peer in self.outbound_peers.values():
+            group = self._netgroup_for_address(peer.address)
+            if not group:
+                continue
+            counts[group] = counts.get(group, 0) + 1
+        return counts
+
+    async def _evict_worst_inbound_for(self, new_addr: str) -> bool:
+        if not self.inbound_peers:
+            return False
+        new_score = self.peer_scores.get_score(new_addr).score if new_addr else 0
+        inbound_group_counts: Dict[str, int] = {}
+        for peer in self.inbound_peers.values():
+            group = self._netgroup_for_address(peer.address)
+            inbound_group_counts[group] = inbound_group_counts.get(group, 0) + 1
+        new_group = self._netgroup_for_address(new_addr) if new_addr else ""
+        is_new_group = bool(new_group) and new_group not in inbound_group_counts
+
+        candidates = list(self.inbound_peers.values())
+        redundant = [
+            p
+            for p in candidates
+            if inbound_group_counts.get(self._netgroup_for_address(p.address), 0) > 1
+        ]
+        pool = redundant if redundant else candidates
+        worst = min(
+            pool,
+            key=lambda p: (
+                -inbound_group_counts.get(self._netgroup_for_address(p.address), 0),
+                self.peer_scores.get_score(p.address).score,
+                getattr(p, "connected_at", 0.0),
+            ),
+        )
+        worst_score = self.peer_scores.get_score(worst.address).score
+        # Prefer diversity improvements: a newcomer from a new netgroup can replace
+        # a redundant incumbent even if scores are similar.
+        if not is_new_group and new_score <= worst_score and worst_score >= 0:
+            return False
+        try:
+            await worst.disconnect()
+            self.peer_scores.record_bad(worst.address, "evicted_for_inbound_slot")
+            return True
+        except Exception:
+            return False
 
     async def broadcast(self, command: str, payload: bytes, exclude: Optional[Set[str]] = None) -> None:
         exclude = exclude or set()
@@ -268,15 +549,24 @@ class ConnectionManager:
 
     async def broadcast_block(self, block) -> None:
         """Broadcast mined block to all peers."""
-        from shared.protocol.messages import InvMessage
+        from shared.protocol.messages import InvMessage, CmpctBlockMessage
 
         block_hash = block.header.hash()
         inv = InvMessage(inventory=[(InvMessage.InvType.MSG_BLOCK, block_hash)])
+        cmpct_payload: Optional[bytes] = None
 
         # Broadcast to all peers
         for peer in self.peers.values():
-            if peer.connected:
-                await peer.send_message('inv', inv.serialize())
+            if not peer.connected:
+                continue
+            if getattr(peer, "prefers_compact_blocks", False):
+                if cmpct_payload is None:
+                    cmpct_payload = CmpctBlockMessage.from_block(
+                        block, nonce=int(time.time())
+                    ).serialize()
+                await peer.send_message("cmpctblock", cmpct_payload)
+            else:
+                await peer.send_message("inv", inv.serialize())
 
         logger.info(f"Block broadcast to {len(self.peers)} peers")
 

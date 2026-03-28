@@ -1,0 +1,46 @@
+# Regtest runtime profile (INI-style; loaded by ConfigParser despite .toml extension).
+# Intended for local development and deterministic test flows.
+
+[main]
+network = regtest
+
+# Storage
+datadir = ~/.berzcoin
+
+# P2P
+bind = 127.0.0.1
+port = 18444
+maxconnections = 32
+maxoutbound = 8
+
+# Discovery
+bootstrap_enabled = false
+dnsseed = false
+dnsseeds =
+addnode =
+connect =
+
+# RPC
+rpcbind = 127.0.0.1
+rpcport = 18443
+rpcallowip = 127.0.0.1
+rpcthreads = 2
+rpcworkqueue = 8
+rpctimeout = 30
+rpc_require_auth = false
+
+# Wallet
+wallet = default
+disablewallet = false
+wallet_private_key =
+
+# Mining
+mining = true
+autominer = false
+miningaddress =
+mining_threads = 1
+
+# Services
+webdashboard = true
+webhost = 127.0.0.1
+webport = 8080

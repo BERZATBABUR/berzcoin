@@ -14,7 +14,7 @@ chmod +x scripts/easy_mine.sh
 ./scripts/easy_mine.sh
 ```
 
-This creates a datadir, writes a minimal config, starts the node, unlocks the wallet, picks a coinbase address, and starts one mining thread. Watch the script output for the wallet passphrase and RPC port (defaults to `127.0.0.1:18443` in the script).
+This creates a datadir, writes a minimal config, starts the node, activates a private-key wallet, picks a coinbase address, and starts one mining thread.
 
 ---
 
@@ -41,12 +41,12 @@ Create `~/.berzcoin/berzcoin.conf` with a `[main]` section (required). Example:
 network = regtest
 datadir = ~/.berzcoin
 wallet = default
-walletpassphrase = change-me-to-a-strong-secret
+wallet_private_key =
 rpcbind = 127.0.0.1
 rpcallowip = 127.0.0.1
 ```
 
-Adjust `datadir` to an absolute path if you prefer. On first start the node creates an encrypted wallet if `wallets/default` does not exist yet.
+Adjust `datadir` to an absolute path if you prefer.
 
 ### 3. Start the node
 
@@ -61,7 +61,7 @@ Leave this terminal running.
 In a second terminal (same machine; default RPC is `127.0.0.1:8332` unless you set `rpcport` in the config):
 
 ```bash
-berzcoin-cli unlockwallet "change-me-to-a-strong-secret" --timeout 86400
+berzcoin-cli activatewallet "<private_key_hex>"
 ADDR=$(berzcoin-cli getnewaddress)
 berzcoin-cli setminingaddress "$ADDR"
 berzcoin-cli setgenerate true --threads 2
@@ -97,7 +97,7 @@ For more RPC examples, see the main [README.md](../README.md).
 
 ## Wallet only (about five minutes)
 
-The **`berzcoin-wallet`** command (from `pip install` / `-e .`) creates a **local encrypted wallet file** and uses your **full node’s JSON-RPC** for balance, new addresses, and sends.
+The **`berzcoin-wallet`** command (from `pip install` / `-e .`) uses your **full node’s JSON-RPC** for balance, new addresses, and sends.
 
 Prebuilt binaries (single-file download) are not published yet—you can use the Python entry point from this repo or after install:
 
@@ -111,18 +111,18 @@ Prebuilt binaries (single-file download) are not published yet—you can use the
 # From source / package:
 # berzcoin-wallet  ===  python3 -m cli.wallet_standalone
 
-# 2. Create local encrypted wallet (offline file under ~/.berzcoin_wallet/)
-berzcoin-wallet create --password "your-secret" --network mainnet
+# 2. Create local wallet material (private-key wallet JSON)
+berzcoin-wallet create --network mainnet
 
 # 3. New receiving address from the *node’s* wallet (node must be running; RPC cookie auth)
 berzcoin-wallet address --node 127.0.0.1:8332
 
-# 4. Send / balance (node must be running, wallet unlocked on the node)
+# 4. Send / balance (node must be running, wallet activated on the node)
 berzcoin-wallet send --to "bc1..." --amount 10 --node 127.0.0.1:8332
 berzcoin-wallet balance --node 127.0.0.1:8332
 ```
 
-Use `--rpc-cookie-file /path/to/.cookie` or `--rpc-password` if RPC is not the default `~/.berzcoin/.cookie`. **`address`**, **`send`**, and **`balance`** require a running **`berzcoind`** with a loaded and unlocked node wallet; only **`create`** is fully local.
+Use `--rpc-cookie-file /path/to/.cookie` or `--rpc-password` if RPC is not the default `~/.berzcoin/.cookie`. **`address`**, **`send`**, and **`balance`** require a running **`berzcoind`** with an active private-key wallet; only **`create`** is fully local.
 
 ---
 
@@ -187,14 +187,6 @@ berzcoind -conf ~/.berzcoin/berzcoin.conf
 berzcoind --regtest --disablewallet -datadir ~/.berzcoin
 ```
 
-You can also override the passphrase from the shell (avoid on shared machines — it appears in `ps`):
-
-```bash
-berzcoind --regtest --walletpassphrase "your-password" -datadir ~/.berzcoin
-```
-
----
-
 ## Start node correctly
 
 ```bash
@@ -209,9 +201,9 @@ berzcoind --regtest -conf ~/.berzcoin/berzcoin.conf
 
 ## Common issues
 
-### “Wallet passphrase required” / failed wallet create
+### Wallet activation errors
 
-Add **`walletpassphrase = ...`** under **`[main]`** in `berzcoin.conf`, or use **`--walletpassphrase`** on **berzcoind**, or set **`disablewallet = true`**.
+Use `createwallet` once, then activate with `activatewallet "<private_key_hex>"`.
 
 ### SQLite “database is locked”
 
@@ -227,7 +219,7 @@ Stop **all** processes using that datadir. With **WAL** mode, SQLite also uses s
 Use **`berzcoin-cli -datadir ~/.berzcoin -rpcport 18443`** (adjust port to your config). Examples:
 
 ```bash
-berzcoin-cli -datadir ~/.berzcoin -rpcport 18443 unlockwallet "your-passphrase" --timeout 86400
+berzcoin-cli -datadir ~/.berzcoin -rpcport 18443 activatewallet "<private_key_hex>"
 berzcoin-cli -datadir ~/.berzcoin -rpcport 18443 generate 101
 berzcoin-cli -datadir ~/.berzcoin -rpcport 18443 getbalance
 ```
@@ -246,3 +238,14 @@ chmod +x scripts/setup_regtest.sh
 ```
 
 This writes `berzcoin.conf`, creates **`wallets/default`** with a valid **bcrt1** mining address (not a random fake string), and prints **`berzcoin-cli`** commands using **`-datadir`** and **`-rpcport 18443`**.
+
+## Two-node propagation smoke test
+
+From the repository:
+
+```bash
+chmod +x scripts/two_node_regtest_propagation.sh
+./scripts/two_node_regtest_propagation.sh
+```
+
+This spins up two local regtest nodes, mines on node1, and verifies node2 reaches the same tip.

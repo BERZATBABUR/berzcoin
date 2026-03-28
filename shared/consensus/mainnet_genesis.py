@@ -1,9 +1,7 @@
 """Mainnet genesis block and checkpoint helpers.
 
-Important:
-- The values below are placeholders (Bitcoin mainnet genesis + sample checkpoint).
-- Replace them with BerzCoin's real mainnet genesis and checkpoints before treating
-  this as consensus-critical.
+Values are BerzCoin-owned network anchors and must stay consistent with
+``ConsensusParams.mainnet``.
 """
 
 from __future__ import annotations
@@ -16,21 +14,20 @@ from typing import Any, Dict, Optional
 class MainnetGenesis:
     """Mainnet genesis configuration (data + helper methods)."""
 
-    # Genesis block (placeholder; replace with actual BerzCoin mainnet genesis)
+    # BerzCoin mainnet genesis metadata.
     GENESIS: Dict[str, Any] = {
         "version": 1,
         "prev_block_hash": "00" * 32,
-        "merkle_root": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
-        "timestamp": 1231006505,
-        "bits": 0x1D00FFFF,
-        "nonce": 2083236893,
-        "hash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+        "merkle_root": "2ed9e25352bd4cdbd52a7d5afc3b780f9dd5b2dd3425c66d8b8f1c45e72d74e2",
+        "timestamp": 1774569600,
+        "bits": 0x207FFFFF,
+        "nonce": 24409,
+        "hash": "0000a2b00a878937fe2431db054cc73784721f63ee8bacffe1e0aa0612f01f25",
     }
 
-    # Checkpoints (block height -> hash). Add more as your mainnet progresses.
+    # Checkpoints (block height -> hash). Add more as mainnet advances.
     CHECKPOINTS: Dict[int, str] = {
-        0: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
-        2016: "00000000000a4d0a2d4ae0e6e0d8f5c8c2b1e9a7d3f5e8b9c2d4f6a8e9b1c3d5",
+        0: "0000a2b00a878937fe2431db054cc73784721f63ee8bacffe1e0aa0612f01f25",
     }
 
     @classmethod
@@ -64,4 +61,3 @@ class MainnetGenesis:
         if chk is None:
             return True
         return chk == block_hash
-

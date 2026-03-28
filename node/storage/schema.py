@@ -12,8 +12,8 @@ class Schema:
     TABLES = {
         "blocks": """
             CREATE TABLE IF NOT EXISTS blocks (
-                height INTEGER PRIMARY KEY,
-                hash TEXT NOT NULL UNIQUE,
+                hash TEXT PRIMARY KEY,
+                height INTEGER NOT NULL,
                 version INTEGER NOT NULL,
                 prev_block_hash TEXT NOT NULL,
                 merkle_root TEXT NOT NULL,
@@ -30,7 +30,7 @@ class Schema:
         "block_headers": """
             CREATE TABLE IF NOT EXISTS block_headers (
                 hash TEXT PRIMARY KEY,
-                height INTEGER NOT NULL UNIQUE,
+                height INTEGER NOT NULL,
                 version INTEGER NOT NULL,
                 prev_block_hash TEXT NOT NULL,
                 merkle_root TEXT NOT NULL,
@@ -143,8 +143,10 @@ class Schema:
     INDEXES = {
         "idx_blocks_height": "CREATE INDEX IF NOT EXISTS idx_blocks_height ON blocks(height)",
         "idx_blocks_hash": "CREATE INDEX IF NOT EXISTS idx_blocks_hash ON blocks(hash)",
+        "idx_blocks_prev_hash": "CREATE INDEX IF NOT EXISTS idx_blocks_prev_hash ON blocks(prev_block_hash)",
         "idx_blocks_timestamp": "CREATE INDEX IF NOT EXISTS idx_blocks_timestamp ON blocks(timestamp)",
         "idx_block_headers_height": "CREATE INDEX IF NOT EXISTS idx_block_headers_height ON block_headers(height)",
+        "idx_block_headers_prev_hash": "CREATE INDEX IF NOT EXISTS idx_block_headers_prev_hash ON block_headers(prev_block_hash)",
         "idx_transactions_block": "CREATE INDEX IF NOT EXISTS idx_transactions_block ON transactions(block_hash)",
         "idx_transactions_height": "CREATE INDEX IF NOT EXISTS idx_transactions_height ON transactions(height)",
         "idx_transactions_txid": "CREATE INDEX IF NOT EXISTS idx_transactions_txid ON transactions(txid)",

@@ -1,17 +1,53 @@
 """Simple private-key based wallet - no password, just private key."""
 
 import json
+import secrets
 import time
-from typing import Dict, Optional, List, Tuple
+import hashlib
+from typing import Optional, List
 from pathlib import Path
 from dataclasses import dataclass, field
 
-from shared.crypto.keys import PrivateKey, PublicKey
+from shared.crypto.keys import PrivateKey
 from shared.crypto.address import public_key_to_address
-# Note: mnemonic utilities not available in this workspace; keep mnemonic empty
 from shared.utils.logging import get_logger
 
 logger = get_logger()
+
+
+def normalize_private_key_hex(private_key: str) -> str:
+    """Normalize and validate private key hex string."""
+    key = str(private_key or "").strip().lower()
+    if key.startswith("0x"):
+        key = key[2:]
+    if not key:
+        raise ValueError("Private key required")
+    if len(key) > 64:
+        raise ValueError("Private key too long")
+    if any(ch not in "0123456789abcdef" for ch in key):
+        raise ValueError("Invalid private key hex")
+    return key.rjust(64, "0")
+
+
+def generate_mnemonic() -> str:
+    """Generate a lightweight 12-word mnemonic phrase."""
+    words = [
+        "abandon", "ability", "able", "about", "above", "absent",
+        "absorb", "abstract", "absurd", "abuse", "access", "accident",
+    ]
+    entropy = secrets.token_bytes(12)
+    return " ".join(words[b % len(words)] for b in entropy)
+
+
+def mnemonic_from_private_key(private_key_hex: str) -> str:
+    """Derive a deterministic 12-word phrase from private key material."""
+    words = [
+        "abandon", "ability", "able", "about", "above", "absent",
+        "absorb", "abstract", "absurd", "abuse", "access", "accident",
+    ]
+    key_bytes = bytes.fromhex(private_key_hex.rjust(64, "0"))
+    digest = hashlib.sha256(key_bytes).digest()
+    return " ".join(words[b % len(words)] for b in digest[:12])
 
 
 @dataclass
@@ -22,10 +58,11 @@ class SimpleWallet:
     public_key_hex: str
     address: str
     mnemonic: str
+    network: str = "mainnet"
     created_at: float = field(default_factory=time.time)
 
     @classmethod
-    def create(cls) -> "SimpleWallet":
+    def create(cls, network: str = "mainnet") -> "SimpleWallet":
         """Create a new wallet with random private key."""
         # Generate private key
         private_key = PrivateKey()
@@ -37,27 +74,30 @@ class SimpleWallet:
         # Derive public key and address
         public_key = private_key.public_key()
         public_key_hex = public_key.to_bytes().hex()
-        address = public_key_to_address(public_key)
+        address = public_key_to_address(public_key, network=network)
 
         return cls(
             private_key_hex=private_key_hex,
             public_key_hex=public_key_hex,
             address=address,
             mnemonic=mnemonic,
+            network=network,
         )
 
     @classmethod
-    def from_private_key(cls, private_key_hex: str) -> "SimpleWallet":
+    def from_private_key(cls, private_key_hex: str, network: str = "mainnet") -> "SimpleWallet":
         """Load wallet from private key."""
-        private_key = PrivateKey(int(private_key_hex, 16))
+        normalized_key = normalize_private_key_hex(private_key_hex)
+        private_key = PrivateKey(int(normalized_key, 16))
         public_key = private_key.public_key()
-        address = public_key_to_address(public_key)
+        address = public_key_to_address(public_key, network=network)
 
         return cls(
-            private_key_hex=private_key_hex,
+            private_key_hex=normalized_key,
             public_key_hex=public_key.to_bytes().hex(),
             address=address,
-            mnemonic="",
+            mnemonic=mnemonic_from_private_key(normalized_key),
+            network=network,
         )
 
     def to_dict(self) -> dict:
@@ -67,6 +107,7 @@ class SimpleWallet:
             "public_key": self.public_key_hex,
             "address": self.address,
             "mnemonic": self.mnemonic,
+            "network": self.network,
             "created_at": self.created_at,
         }
 
@@ -78,6 +119,7 @@ class SimpleWallet:
             public_key_hex=data["public_key"],
             address=data["address"],
             mnemonic=data.get("mnemonic", ""),
+            network=data.get("network", "mainnet"),
             created_at=data.get("created_at", time.time()),
         )
 
@@ -85,9 +127,10 @@ class SimpleWallet:
 class SimpleWalletManager:
     """Manage simple wallets by private key."""
 
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, network: str = "mainnet"):
         """Initialize wallet manager."""
         self.data_dir = data_dir
+        self.network = str(network or "mainnet")
         self.wallets_dir = data_dir / "wallets"
         self.wallets_dir.mkdir(parents=True, exist_ok=True)
         self.active_wallet: Optional[SimpleWallet] = None
@@ -95,29 +138,24 @@ class SimpleWalletManager:
 
     def create_wallet(self) -> SimpleWallet:
         """Create a new wallet."""
-        wallet = SimpleWallet.create()
+        wallet = SimpleWallet.create(network=self.network)
         self._save_wallet(wallet)
         return wallet
 
     def activate_wallet(self, private_key: str) -> Optional[SimpleWallet]:
         """Activate wallet using private key."""
+        normalized_key = normalize_private_key_hex(private_key)
         # Try to load existing
-        wallet = self._load_wallet(private_key)
+        wallet = self._load_wallet(normalized_key)
         if not wallet:
             # Create new from private key
-            wallet = SimpleWallet.from_private_key(private_key)
+            wallet = SimpleWallet.from_private_key(normalized_key, network=self.network)
             self._save_wallet(wallet)
 
         self.active_wallet = wallet
-        self.active_private_key = private_key
+        self.active_private_key = normalized_key
         logger.info(f"Wallet activated: {wallet.address[:16]}...")
         return wallet
-
-    def deactivate_wallet(self) -> None:
-        """Deactivate current wallet."""
-        self.active_wallet = None
-        self.active_private_key = None
-        logger.info("Wallet deactivated")
 
     def get_active_wallet(self) -> Optional[SimpleWallet]:
         """Get active wallet."""
@@ -154,7 +192,7 @@ class SimpleWalletManager:
     def _load_wallet(self, private_key: str) -> Optional[SimpleWallet]:
         """Load wallet by private key."""
         # Create a temp wallet to get address
-        temp = SimpleWallet.from_private_key(private_key)
+        temp = SimpleWallet.from_private_key(private_key, network=self.network)
         wallet_file = self.wallets_dir / f"{temp.address}.json"
 
         if wallet_file.exists():

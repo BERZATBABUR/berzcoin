@@ -3,6 +3,8 @@
 import secrets
 import hashlib
 from typing import Tuple, Optional
+from .base58 import base58_check_encode, base58_check_decode
+from .secp256k1 import N as SECP256K1_ORDER
 from .secp256k1 import private_to_public, sign_message, verify_signature
 
 class PrivateKey:
@@ -15,9 +17,13 @@ class PrivateKey:
             key: Optional private key integer (generates random if not provided)
         """
         if key is None:
-            self.key = secrets.randbelow(0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141)
+            # Valid secp256k1 private keys are in [1, n-1].
+            self.key = secrets.randbelow(SECP256K1_ORDER - 1) + 1
         else:
-            self.key = key
+            key_int = int(key)
+            if key_int <= 0 or key_int >= SECP256K1_ORDER:
+                raise ValueError("Invalid private key range")
+            self.key = key_int
 
     def to_int(self) -> int:
         """Convert to integer."""
@@ -26,6 +32,28 @@ class PrivateKey:
     def to_hex(self) -> str:
         """Convert to hex string."""
         return hex(self.key)[2:].zfill(64)
+
+    def to_wif(self, network: str = "mainnet", compressed: bool = True) -> str:
+        """Encode private key as Wallet Import Format (WIF)."""
+        version = b"\x80" if network == "mainnet" else b"\xef"
+        payload = version + self.key.to_bytes(32, "big")
+        if compressed:
+            payload += b"\x01"
+        return base58_check_encode(payload)
+
+    @classmethod
+    def from_wif(cls, wif: str) -> "PrivateKey":
+        """Create private key from WIF string."""
+        payload = base58_check_decode(wif)
+        if len(payload) not in (33, 34):
+            raise ValueError("Invalid WIF payload length")
+        version = payload[0]
+        if version not in (0x80, 0xEF):
+            raise ValueError("Invalid WIF version")
+        key_bytes = payload[1:33]
+        if len(payload) == 34 and payload[33] != 0x01:
+            raise ValueError("Invalid compressed WIF marker")
+        return cls(int.from_bytes(key_bytes, "big"))
 
     def public_key(self) -> 'PublicKey':
         """Derive public key from private key."""

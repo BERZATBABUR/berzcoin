@@ -23,10 +23,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install flake8 black
 
+      - name: Validate release artifacts are not placeholders
+        run: bash scripts/check_no_placeholder_artifacts.sh
+
       - name: Run flake8
         run: flake8 node/ shared/ cli/ --max-line-length=120 --ignore=E203,W503,E501
-        continue-on-error: true
 
       - name: Run black
         run: black --check node/ shared/ cli/
-        continue-on-error: true

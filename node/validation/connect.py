@@ -34,8 +34,13 @@ class ConnectBlock:
             with self.utxo_store.db.transaction():
                 for tx in block.transactions:
                     if not tx.is_coinbase():
-                        for txin in tx.vin:
-                            success = self.utxo_store.spend_utxo(txin.prev_tx_hash.hex(), txin.prev_tx_index)
+                        for in_idx, txin in enumerate(tx.vin):
+                            success = self.utxo_store.spend_utxo(
+                                txin.prev_tx_hash.hex(),
+                                txin.prev_tx_index,
+                                spent_by_txid=tx.txid().hex(),
+                                spent_by_index=in_idx,
+                            )
                             if not success:
                                 logger.error("Failed to spend UTXO")
                                 return False

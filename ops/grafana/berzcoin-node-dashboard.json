@@ -1,0 +1,61 @@
+{
+  "title": "BerzCoin Node Ops",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Best Height",
+      "type": "timeseries",
+      "targets": [{"expr": "berzcoin_best_height", "legendFormat": "height"}],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+    },
+    {
+      "id": 2,
+      "title": "Sync Lag (blocks)",
+      "type": "timeseries",
+      "targets": [{"expr": "berzcoin_sync_lag_blocks", "legendFormat": "lag"}],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+    },
+    {
+      "id": 3,
+      "title": "Peer Count",
+      "type": "timeseries",
+      "targets": [{"expr": "berzcoin_peer_count", "legendFormat": "peers"}],
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8}
+    },
+    {
+      "id": 4,
+      "title": "Mempool Size",
+      "type": "timeseries",
+      "targets": [{"expr": "berzcoin_mempool_size", "legendFormat": "txs"}],
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8}
+    },
+    {
+      "id": 5,
+      "title": "DB Size Bytes",
+      "type": "timeseries",
+      "targets": [{"expr": "berzcoin_chainstate_db_size_bytes", "legendFormat": "db_bytes"}],
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8}
+    },
+    {
+      "id": 6,
+      "title": "Readiness SLO",
+      "type": "stat",
+      "targets": [{"expr": "berzcoin_readiness_slo", "legendFormat": "ready"}],
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 16}
+    },
+    {
+      "id": 7,
+      "title": "Sync Lag SLO",
+      "type": "stat",
+      "targets": [{"expr": "berzcoin_sync_lag_slo", "legendFormat": "sync_lag_ok"}],
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 16}
+    }
+  ]
+}

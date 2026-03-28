@@ -16,7 +16,12 @@ from shared.crypto.base58 import (
 )
 from shared.crypto.bech32 import bech32_decode, bech32_encode
 from shared.crypto.keys import PrivateKey, PublicKey
-from shared.crypto.signatures import sign_message_hash, verify_signature
+from shared.crypto.signatures import (
+    sign_message_hash,
+    verify_signature,
+    sign_schnorr_message_hash,
+    verify_schnorr_signature,
+)
 
 CURVE_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
@@ -29,6 +34,12 @@ class TestCrypto(unittest.TestCase):
         self.assertIsNotNone(key.key)
         self.assertIsInstance(key.key, int)
         self.assertTrue(0 < key.key < CURVE_ORDER)
+
+    def test_private_key_range_validation(self) -> None:
+        with self.assertRaises(ValueError):
+            PrivateKey(0)
+        with self.assertRaises(ValueError):
+            PrivateKey(CURVE_ORDER)
 
     def test_public_key_derivation(self) -> None:
         private_key = PrivateKey(12345)
@@ -90,6 +101,20 @@ class TestCrypto(unittest.TestCase):
         self.assertEqual(decoded_hrp, hrp)
         self.assertEqual(decoded_ver, witver)
         self.assertEqual(decoded_prog, witprog)
+
+    def test_private_key_wif_roundtrip(self) -> None:
+        key = PrivateKey(12345)
+        wif = key.to_wif(network="regtest", compressed=True)
+        restored = PrivateKey.from_wif(wif)
+        self.assertEqual(restored.to_hex(), key.to_hex())
+
+    def test_schnorr_sign_verify(self) -> None:
+        key = PrivateKey(12345)
+        msg = hash256(b"Taproot test message")
+        sig = sign_schnorr_message_hash(key, msg)
+        xonly = key.public_key().to_bytes()[1:33]
+        self.assertEqual(len(sig), 64)
+        self.assertTrue(verify_schnorr_signature(xonly, msg, sig))
 
 
 if __name__ == "__main__":

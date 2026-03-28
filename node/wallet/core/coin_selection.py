@@ -39,7 +39,7 @@ class CoinSelector:
             return None
         
         # Sort UTXOs by amount
-        utxos_sorted = sorted(utxos, key=lambda u: u.amount)
+        utxos_sorted = sorted(utxos, key=lambda u: self._to_outpoint_tuple(u)[2])
         
         # Different strategies
         if strategy == "largest":
@@ -67,8 +67,9 @@ class CoinSelector:
         
         # Use largest UTXOs (iterate reverse)
         for utxo in reversed(utxos):
-            selected.append((utxo.txid, utxo.vout, utxo.amount))
-            total += utxo.amount
+            txid, vout, amount = self._to_outpoint_tuple(utxo)
+            selected.append((txid, vout, amount))
+            total += amount
             
             if total >= target:
                 break
@@ -94,9 +95,10 @@ class CoinSelector:
         
         # Try smallest UTXOs first
         for utxo in utxos:
-            if total + utxo.amount <= target + 10000:  # Allow some overhead
-                selected.append((utxo.txid, utxo.vout, utxo.amount))
-                total += utxo.amount
+            txid, vout, amount = self._to_outpoint_tuple(utxo)
+            if total + amount <= target + 10000:  # Allow some overhead
+                selected.append((txid, vout, amount))
+                total += amount
             
             if total >= target:
                 break
@@ -123,11 +125,11 @@ class CoinSelector:
         dp[0] = []
         
         for utxo in utxos:
-            amount = utxo.amount
+            txid, vout, amount = self._to_outpoint_tuple(utxo)
             for i in range(len(dp) - 1, -1, -1):
                 if dp[i] is not None and i + amount < len(dp):
                     if dp[i + amount] is None or len(dp[i + amount]) > len(dp[i]) + 1:
-                        dp[i + amount] = dp[i] + [(utxo.txid, utxo.vout, amount)]
+                        dp[i + amount] = dp[i] + [(txid, vout, amount)]
         
         # Find best combination
         best_amount = target
@@ -222,3 +224,11 @@ class CoinSelector:
         # Simplified: 150 bytes per input, 34 bytes per output, 10 bytes overhead
         tx_size = 10 + inputs * 150 + outputs * 34
         return tx_size * fee_rate
+
+    def _to_outpoint_tuple(self, utxo: Any) -> Tuple[str, int, int]:
+        if isinstance(utxo, dict):
+            txid = str(utxo.get("txid", ""))
+            vout = int(utxo.get("vout", utxo.get("index", 0)))
+            amount = int(utxo.get("amount", utxo.get("value", 0)))
+            return txid, vout, amount
+        return str(utxo.txid), int(utxo.vout), int(utxo.amount)
