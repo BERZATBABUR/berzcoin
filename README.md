@@ -107,7 +107,25 @@ Optional demo bootstrap (auto wallet+mining):
 scripts/run_v1_interface.sh --bootstrap-demo
 ```
 
+Mainnet mode (safe defaults: no auto reset, no demo mining bootstrap):
+
+```bash
+scripts/run_v1_interface.sh --network mainnet --datadir ~/.berzcoin_v1_mainnet
+```
+
 When default ports are busy, the script auto-selects free ports and writes them to `~/.berzcoin_v1/run_info.env`.
+
+LAN peer mode (two computers on same network):
+
+```bash
+# Node A (miner): expose P2P on LAN
+scripts/run_v1_interface.sh --datadir ~/.berzcoin_v1 --lan-mode --p2p-port 18444 --no-reset-datadir
+
+# Node B: connect to Node A
+scripts/run_v1_interface.sh --datadir ~/.berzcoin_v1 --lan-mode --p2p-port 18444 --addnode <NODE_A_LAN_IP>:18444 --no-reset-datadir
+```
+
+Keep RPC/dashboard local; only P2P is opened by `--lan-mode`.
 
 ### Quick start: dashboard + wallet + regtest mining
 

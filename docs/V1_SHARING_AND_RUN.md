@@ -81,6 +81,7 @@ The launcher prints the dashboard URL and writes runtime info to:
 Note:
 - v1 launcher resets datadir by default for a fresh chain.
 - Add `--no-reset-datadir` if you want to keep existing chain state.
+- For mainnet/testnet runs, launcher defaults to **no reset**.
 
 Use:
 
@@ -123,3 +124,4 @@ scripts/run_v1_interface.sh --datadir ~/.berzcoin_v1
 - If reset fails because files are busy, stop existing node first using `node.pid`, then rerun with `--reset-datadir`.
 - If mining does not start, ensure a valid mining address is set in Mining page.
 - If transactions do not confirm, ensure mining is active and check latest block height on the Blocks page.
+- For LAN peering between two machines, start with `--lan-mode` and use `--addnode <peer_ip>:<peer_port>` on at least one side.

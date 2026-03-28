@@ -12,18 +12,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-DATADIR="${BERZCOIN_V1_DATADIR:-${HOME}/.berzcoin_v1}"
-CONF="${DATADIR}/berzcoin.conf"
-RPC_PORT="${BERZCOIN_V1_RPC_PORT:-18443}"
-P2P_PORT="${BERZCOIN_V1_P2P_PORT:-18444}"
+NETWORK="${BERZCOIN_V1_NETWORK:-regtest}"
+DATADIR="${BERZCOIN_V1_DATADIR:-}"
+CONF=""
+RPC_PORT="${BERZCOIN_V1_RPC_PORT:-}"
+P2P_PORT="${BERZCOIN_V1_P2P_PORT:-}"
+P2P_BIND="${BERZCOIN_V1_P2P_BIND:-127.0.0.1}"
+ADDNODE="${BERZCOIN_V1_ADDNODE:-}"
 WEB_PORT="${BERZCOIN_V1_WEB_PORT:-8080}"
 MINER_THREADS="${BERZCOIN_V1_MINER_THREADS:-1}"
 MINING_TARGET_SECS="${BERZCOIN_V1_MINING_TARGET_SECS:-60}"
 COINBASE_MATURITY="${BERZCOIN_V1_COINBASE_MATURITY:-1}"
 MINING_REQUIRE_WALLET_MATCH="${BERZCOIN_V1_MINING_REQUIRE_WALLET_MATCH:-false}"
 BOOTSTRAP_DEMO=0
-# v1 default: start from a fresh chain each run unless explicitly disabled.
-RESET_DATADIR="${BERZCOIN_V1_RESET_DATADIR:-1}"
+# Auto behavior:
+# - regtest => reset by default
+# - mainnet/testnet => keep datadir by default
+RESET_DATADIR="${BERZCOIN_V1_RESET_DATADIR:-}"
 
 NODE_LOG=""
 NODE_PID_FILE=""
@@ -37,22 +42,29 @@ Run BerzCoin v1 in one command (background mode):
   node + dashboard
 
 Options:
-  --datadir PATH       Data directory (default: ${DATADIR})
-  --rpc-port PORT      RPC port (default: ${RPC_PORT})
-  --p2p-port PORT      P2P port (default: ${P2P_PORT})
+  --network NAME       Network: regtest|testnet|mainnet (default: ${NETWORK})
+  --datadir PATH       Data directory (default: auto by network)
+  --rpc-port PORT      RPC port (default: auto by network)
+  --p2p-port PORT      P2P port (default: auto by network)
+  --p2p-bind HOST      P2P bind host (default: ${P2P_BIND})
+  --addnode HOST:PORT  Add static peer (can be repeated)
+  --lan-mode           Shortcut for --p2p-bind 0.0.0.0
   --web-port PORT      Dashboard web port (default: ${WEB_PORT})
   --threads N          Miner thread count (default: ${MINER_THREADS})
   --block-time-secs N  Mining target seconds/block (default: ${MINING_TARGET_SECS})
   --coinbase-maturity N  Coinbase maturity confirmations (default: ${COINBASE_MATURITY})
-  --bootstrap-demo     Auto create+activate wallet and start mining (demo only)
-  --reset-datadir      Delete datadir first (destructive; default for v1)
+  --bootstrap-demo     Auto create+activate wallet and start mining (regtest only)
+  --reset-datadir      Delete datadir first (destructive; default on regtest)
   --no-reset-datadir   Keep existing datadir/chain state
   -h, --help           Show this help
 
 Environment (optional):
+  BERZCOIN_V1_NETWORK
   BERZCOIN_V1_DATADIR
   BERZCOIN_V1_RPC_PORT
   BERZCOIN_V1_P2P_PORT
+  BERZCOIN_V1_P2P_BIND
+  BERZCOIN_V1_ADDNODE
   BERZCOIN_V1_WEB_PORT
   BERZCOIN_V1_MINER_THREADS
   BERZCOIN_V1_MINING_TARGET_SECS
@@ -68,6 +80,11 @@ EOF
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --network)
+        [[ $# -ge 2 ]] || { echo "error: --network requires a value" >&2; exit 2; }
+        NETWORK="$2"
+        shift 2
+        ;;
       --datadir)
         [[ $# -ge 2 ]] || { echo "error: --datadir requires a value" >&2; exit 2; }
         DATADIR="$2"
@@ -82,6 +99,24 @@ parse_args() {
         [[ $# -ge 2 ]] || { echo "error: --p2p-port requires a value" >&2; exit 2; }
         P2P_PORT="$2"
         shift 2
+        ;;
+      --p2p-bind)
+        [[ $# -ge 2 ]] || { echo "error: --p2p-bind requires a value" >&2; exit 2; }
+        P2P_BIND="$2"
+        shift 2
+        ;;
+      --addnode)
+        [[ $# -ge 2 ]] || { echo "error: --addnode requires a value" >&2; exit 2; }
+        if [[ -n "${ADDNODE}" ]]; then
+          ADDNODE="${ADDNODE},$2"
+        else
+          ADDNODE="$2"
+        fi
+        shift 2
+        ;;
+      --lan-mode)
+        P2P_BIND="0.0.0.0"
+        shift
         ;;
       --web-port)
         [[ $# -ge 2 ]] || { echo "error: --web-port requires a value" >&2; exit 2; }
@@ -263,17 +298,71 @@ wait_for_web() {
   return 1
 }
 
+resolve_network_defaults() {
+  if [[ "${NETWORK}" != "regtest" && "${NETWORK}" != "testnet" && "${NETWORK}" != "mainnet" ]]; then
+    echo "error: --network must be one of: regtest, testnet, mainnet" >&2
+    exit 2
+  fi
+
+  if [[ -z "${DATADIR}" ]]; then
+    case "${NETWORK}" in
+      regtest) DATADIR="${HOME}/.berzcoin_v1" ;;
+      testnet) DATADIR="${HOME}/.berzcoin_v1_testnet" ;;
+      mainnet) DATADIR="${HOME}/.berzcoin_v1_mainnet" ;;
+    esac
+  fi
+
+  if [[ -z "${RPC_PORT}" ]]; then
+    case "${NETWORK}" in
+      regtest) RPC_PORT="18443" ;;
+      testnet) RPC_PORT="18332" ;;
+      mainnet) RPC_PORT="8332" ;;
+    esac
+  fi
+
+  if [[ -z "${P2P_PORT}" ]]; then
+    case "${NETWORK}" in
+      regtest) P2P_PORT="18444" ;;
+      testnet) P2P_PORT="18333" ;;
+      mainnet) P2P_PORT="8333" ;;
+    esac
+  fi
+
+  if [[ -z "${RESET_DATADIR}" ]]; then
+    if [[ "${NETWORK}" == "regtest" ]]; then
+      RESET_DATADIR="1"
+    else
+      RESET_DATADIR="0"
+    fi
+  fi
+}
+
+network_flag_args() {
+  case "${NETWORK}" in
+    regtest)
+      echo "--regtest"
+      ;;
+    testnet)
+      echo "--testnet"
+      ;;
+    *)
+      ;;
+  esac
+}
+
 port_free() {
-  local port="$1"
-  python3 - "$port" <<'PY'
+  local host="$1"
+  local port="$2"
+  python3 - "$host" "$port" <<'PY'
 import socket
 import sys
 
-port = int(sys.argv[1])
+host = str(sys.argv[1])
+port = int(sys.argv[2])
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try:
-    sock.bind(("127.0.0.1", port))
+    sock.bind((host, port))
 except OSError:
     sys.exit(1)
 finally:
@@ -283,10 +372,14 @@ PY
 }
 
 find_free_port() {
-  python3 - <<'PY'
+  local host="${1:-127.0.0.1}"
+  python3 - "$host" <<'PY'
 import socket
+import sys
+
+host = str(sys.argv[1])
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.bind(("127.0.0.1", 0))
+sock.bind((host, 0))
 print(sock.getsockname()[1])
 sock.close()
 PY
@@ -309,26 +402,30 @@ normalize_ports() {
   local requested_p2p="${P2P_PORT}"
   local requested_web="${WEB_PORT}"
 
-  if ! port_free "${RPC_PORT}"; then
+  if ! port_free "127.0.0.1" "${RPC_PORT}"; then
     RPC_PORT="$(find_free_port)"
     echo "[!] Requested RPC port ${requested_rpc} is busy; using ${RPC_PORT} instead."
   fi
 
-  if ! port_free "${P2P_PORT}"; then
-    P2P_PORT="$(find_free_port)"
+  if ! port_free "${P2P_BIND}" "${P2P_PORT}"; then
+    P2P_PORT="$(find_free_port "${P2P_BIND}")"
     echo "[!] Requested P2P port ${requested_p2p} is busy; using ${P2P_PORT} instead."
   fi
 
-  if ! port_free "${WEB_PORT}"; then
+  if ! port_free "127.0.0.1" "${WEB_PORT}"; then
     WEB_PORT="$(find_free_port)"
     echo "[!] Requested web port ${requested_web} is busy; using ${WEB_PORT} instead."
   fi
 }
 
 write_conf() {
+  local addnode_line=""
+  if [[ -n "${ADDNODE}" ]]; then
+    addnode_line="addnode = ${ADDNODE}"
+  fi
   cat > "${CONF}" <<EOF
 [main]
-network = regtest
+network = ${NETWORK}
 datadir = ${DATADIR}
 
 disablewallet = false
@@ -341,8 +438,9 @@ rpcbind = 127.0.0.1
 rpcport = ${RPC_PORT}
 rpcallowip = 127.0.0.1
 
-bind = 127.0.0.1
+bind = ${P2P_BIND}
 port = ${P2P_PORT}
+${addnode_line}
 
 mining = false
 autominer = false
@@ -359,6 +457,7 @@ EOF
 }
 
 start_node_if_needed() {
+  local network_arg="${1:-}"
   if [[ -f "${NODE_PID_FILE}" ]]; then
     local existing_pid
     existing_pid="$(cat "${NODE_PID_FILE}" 2>/dev/null || true)"
@@ -372,10 +471,15 @@ start_node_if_needed() {
   fi
 
   echo "[*] Starting berzcoind in background..."
+  local launch_args=("${BERZCOIND[@]}")
+  if [[ -n "${network_arg}" ]]; then
+    launch_args+=("${network_arg}")
+  fi
+  launch_args+=(-conf "${CONF}" -datadir "${DATADIR}")
   if command -v setsid >/dev/null 2>&1; then
-    nohup setsid "${BERZCOIND[@]}" --regtest -conf "${CONF}" -datadir "${DATADIR}" </dev/null >"${NODE_LOG}" 2>&1 &
+    nohup setsid "${launch_args[@]}" </dev/null >"${NODE_LOG}" 2>&1 &
   else
-    nohup "${BERZCOIND[@]}" --regtest -conf "${CONF}" -datadir "${DATADIR}" </dev/null >"${NODE_LOG}" 2>&1 &
+    nohup "${launch_args[@]}" </dev/null >"${NODE_LOG}" 2>&1 &
   fi
   local node_pid=$!
   disown "${node_pid}" 2>/dev/null || true
@@ -384,9 +488,12 @@ start_node_if_needed() {
 
 write_run_info() {
   cat > "${RUN_INFO_FILE}" <<EOF
+NETWORK=${NETWORK}
 DATADIR=${DATADIR}
 RPC_PORT=${RPC_PORT}
 P2P_PORT=${P2P_PORT}
+P2P_BIND=${P2P_BIND}
+ADDNODE=${ADDNODE}
 WEB_PORT=${WEB_PORT}
 BOOTSTRAP_DEMO=${BOOTSTRAP_DEMO}
 RESET_DATADIR=${RESET_DATADIR}
@@ -438,9 +545,14 @@ prime_and_start_mining() {
 
 main() {
   parse_args "$@"
+  resolve_network_defaults
 
   if [[ "${RESET_DATADIR}" != "0" && "${RESET_DATADIR}" != "1" ]]; then
     echo "error: BERZCOIN_V1_RESET_DATADIR must be 0 or 1" >&2
+    exit 2
+  fi
+  if [[ "${BOOTSTRAP_DEMO}" == "1" && "${NETWORK}" != "regtest" ]]; then
+    echo "error: --bootstrap-demo is only supported on regtest" >&2
     exit 2
   fi
 
@@ -448,14 +560,20 @@ main() {
   NODE_PID_FILE="${DATADIR}/node.pid"
   RUN_INFO_FILE="${DATADIR}/run_info.env"
   CONF="${DATADIR}/berzcoin.conf"
+  local network_arg=""
 
   normalize_ports
 
   echo "[*] BerzCoin v1 launcher"
+  echo "    network: ${NETWORK}"
   echo "    datadir: ${DATADIR}"
   echo "    rpc:     127.0.0.1:${RPC_PORT}"
+  echo "    p2p:     ${P2P_BIND}:${P2P_PORT}"
   echo "    web:     127.0.0.1:${WEB_PORT}"
   echo "    block:   ${MINING_TARGET_SECS}s target"
+  if [[ -n "${ADDNODE}" ]]; then
+    echo "    addnode: ${ADDNODE}"
+  fi
   if [[ "${RESET_DATADIR}" == "1" ]]; then
     echo "    mode:    fresh chain (datadir reset)"
   else
@@ -474,7 +592,8 @@ main() {
 
   write_conf
   select_commands
-  start_node_if_needed
+  network_arg="$(network_flag_args)"
+  start_node_if_needed "${network_arg}"
 
   echo "[*] Waiting for RPC..."
   if ! wait_for_rpc; then
