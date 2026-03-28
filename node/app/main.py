@@ -2,8 +2,10 @@
 
 import argparse
 import asyncio
+import ipaddress
 import signal
 import sys
+import time
 from typing import Any, Optional, Dict
 
 from shared.utils.logging import get_logger, setup_logging
@@ -12,6 +14,7 @@ from node.mempool.pool import Mempool
 from node.mining.miner import MiningNode
 from node.p2p.addrman import AddrMan
 from node.p2p.connman import ConnectionManager
+from node.p2p.dns_seeds import DNSSeeds
 from node.rpc.handlers.blockchain import BlockchainHandlers
 from node.rpc.handlers.control import ControlHandlers
 from node.rpc.handlers.mempool import MempoolHandlers
@@ -31,6 +34,7 @@ from shared.protocol.messages import (
     GetDataMessage,
     GetHeadersMessage,
     HeadersMessage,
+    AddrMessage,
     TxMessage,
     BlockMessage,
     PingMessage,
@@ -378,6 +382,49 @@ class BerzCoinNode:
                 ),
             )
 
+    @staticmethod
+    def _split_host_port(address: str, default_port: int) -> tuple[str, int]:
+        raw = (address or "").strip()
+        if not raw:
+            return "", int(default_port)
+        if raw.startswith("["):
+            end = raw.find("]")
+            if end > 0:
+                host = raw[1:end]
+                if len(raw) > end + 2 and raw[end + 1] == ":":
+                    try:
+                        return host, int(raw[end + 2 :])
+                    except ValueError:
+                        return host, int(default_port)
+                return host, int(default_port)
+        if raw.count(":") > 1:
+            return raw, int(default_port)
+        if ":" in raw:
+            host, port = raw.rsplit(":", 1)
+            try:
+                return host, int(port)
+            except ValueError:
+                return host, int(default_port)
+        return raw, int(default_port)
+
+    @staticmethod
+    def _host_to_addr_bytes(host: str) -> Optional[bytes]:
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            return None
+        if isinstance(ip, ipaddress.IPv4Address):
+            return b"\x00" * 10 + b"\xff\xff" + ip.packed
+        return ip.packed
+
+    @staticmethod
+    def _addr_bytes_to_host(ip_bytes: bytes) -> Optional[str]:
+        if len(ip_bytes) != 16:
+            return None
+        if ip_bytes.startswith(b"\x00" * 10 + b"\xff\xff"):
+            return str(ipaddress.IPv4Address(ip_bytes[12:16]))
+        return str(ipaddress.IPv6Address(ip_bytes))
+
     async def _on_p2p_message(self, peer, command: str, payload: bytes) -> None:
         """Handle inbound P2P messages with validation-first relay behavior."""
         if self._peer_rate_limited(peer.address):
@@ -390,6 +437,60 @@ class BerzCoinNode:
                 msg, _ = SendCmpctMessage.deserialize(payload)
                 peer.prefers_compact_blocks = bool(msg.announce)
                 peer.compact_block_version = int(msg.version)
+                return
+
+            if command == "getaddr":
+                if not self.connman:
+                    return
+                default_port = int(self.config.get("port", 8333))
+                candidates = list(self.connman.addrman.get_addresses(1000))
+                candidates.extend(list(self.connman.peers.keys()))
+                relayed: list[dict[str, Any]] = []
+                seen: set[str] = set()
+                now = int(time.time())
+                for addr in candidates:
+                    if addr in seen:
+                        continue
+                    seen.add(addr)
+                    host, port = self._split_host_port(addr, default_port)
+                    ip_bytes = self._host_to_addr_bytes(host)
+                    if not ip_bytes:
+                        continue
+                    if not (1 <= int(port) <= 65535):
+                        continue
+                    relayed.append(
+                        {
+                            "time": now,
+                            "services": 1,
+                            "ip": ip_bytes,
+                            "port": int(port),
+                        }
+                    )
+                    if len(relayed) >= 1000:
+                        break
+                await peer.send_message("addr", AddrMessage(addresses=relayed).serialize())
+                return
+
+            if command == "addr":
+                if not self.connman:
+                    return
+                msg, _ = AddrMessage.deserialize(payload)
+                relayed_addrs: list[str] = []
+                default_port = int(self.config.get("port", 8333))
+                for entry in msg.addresses[:1000]:
+                    host = self._addr_bytes_to_host(entry.get("ip", b""))
+                    if not host:
+                        continue
+                    port = int(entry.get("port", default_port))
+                    if not (1 <= port <= 65535):
+                        continue
+                    if ":" in host:
+                        relayed_addrs.append(f"[{host}]:{port}")
+                    else:
+                        relayed_addrs.append(f"{host}:{port}")
+                added = self.connman.filter_and_add_addrs(peer.address, relayed_addrs)
+                if added:
+                    logger.debug("Accepted %s relayed addr(s) from %s", added, peer.address)
                 return
 
             if command == "inv":
@@ -656,8 +757,10 @@ class BerzCoinNode:
         connect_only = self.config.is_connect_only()
         dns_seeds = None
         if self.config.get("dnsseed"):
-            logger.warning("DNS seed discovery is disabled in this release")
-            self.config.set("dnsseed", False)
+            configured_seeds = self.config.get("dnsseeds", []) or []
+            dns_seeds = DNSSeeds(seeds=list(configured_seeds))
+            if not configured_seeds:
+                logger.warning("dnsseed enabled but dnsseeds list is empty")
 
         self.connman = ConnectionManager(
             addrman=addrman,

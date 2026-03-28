@@ -91,8 +91,13 @@ class WalletHandlers:
         utxos = self.node.chainstate.get_utxos_for_address(wallet.address, 1000)
         if not utxos:
             raise ValueError("No UTXOs found")
-        best_height = int(self.node.chainstate.get_best_height())
-        maturity = int(getattr(self.node.chainstate.params, "coinbase_maturity", 100))
+        get_best_height = getattr(self.node.chainstate, "get_best_height", None)
+        if callable(get_best_height):
+            best_height = int(get_best_height())
+        else:
+            best_height = int(getattr(self.node.chainstate, "best_height", 0))
+        chain_params = getattr(self.node.chainstate, "params", None)
+        maturity = int(getattr(chain_params, "coinbase_maturity", 100))
         spendable_utxos = []
         immature_sats = 0
         for utxo in utxos:

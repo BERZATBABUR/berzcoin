@@ -165,7 +165,7 @@ class TestMempoolPolicyParity(unittest.TestCase):
             _sign_input(tx, 0, key, spk)
 
             self.assertFalse(await mempool.add_transaction(tx))
-            self.assertEqual(mempool.last_reject_reason, "validation_failed")
+            self.assertEqual(mempool.last_reject_reason, "inputs_less_than_outputs")
 
         asyncio.run(run())
 

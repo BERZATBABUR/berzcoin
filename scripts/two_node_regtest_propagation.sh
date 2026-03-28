@@ -66,14 +66,14 @@ wait_rpc() {
 
 extract_json_field() {
   local key="$1"
-  python3 - "$key" << 'PY'
+  python3 -c '
 import json
 import sys
 
 key = sys.argv[1]
 obj = json.loads(sys.stdin.read())
 print(obj.get(key, ""))
-PY
+' "$key"
 }
 
 rm -rf "${BASE_DIR}"
