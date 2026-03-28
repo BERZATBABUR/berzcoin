@@ -26,6 +26,10 @@ class MiningWalletDashboard:
         self.app = None
         self.runner = None
         self._flow_running = False
+        self._flow_task = None
+        self._flow_started_at = 0
+        self._flow_last_result = None
+        self._flow_last_error = None
 
     def _wallet_manager(self) -> SimpleWalletManager:
         manager = getattr(self.node, "simple_wallet_manager", None)
@@ -68,6 +72,7 @@ class MiningWalletDashboard:
         self.app.router.add_get('/api/network/peers', self.network_peers)
         self.app.router.add_get('/api/authority/chain', self.authority_chain_info)
         self.app.router.add_post('/api/interface/verify-two-node-flow', self.verify_two_node_flow)
+        self.app.router.add_get('/api/interface/verify-two-node-flow', self.verify_two_node_flow_status)
         
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
@@ -482,15 +487,40 @@ class MiningWalletDashboard:
     async def verify_two_node_flow(self, request):
         """Run two-node end-to-end verification flow for interface users."""
         if self._flow_running:
-            return json_response({'ok': False, 'error': 'Verification is already running'}, status=409)
+            return json_response(await self._build_flow_status())
         self._flow_running = True
+        self._flow_started_at = int(time.time())
+        self._flow_last_result = None
+        self._flow_last_error = None
+        self._flow_task = asyncio.create_task(self._run_two_node_flow())
+        return json_response(await self._build_flow_status())
+
+    async def _run_two_node_flow(self) -> None:
         try:
             verifier = TwoNodeFlowVerifier()
             result = await asyncio.to_thread(verifier.run, 180)
-            status = 200 if result.get("ok") else 500
-            return json_response(result, status=status)
+            self._flow_last_result = result
+        except Exception as e:
+            self._flow_last_error = str(e)
+            self._flow_last_result = {'ok': False, 'error': self._flow_last_error}
+            logger.exception("Two-node verification flow crashed")
         finally:
             self._flow_running = False
+            self._flow_task = None
+
+    async def _build_flow_status(self):
+        now = int(time.time())
+        return {
+            'running': bool(self._flow_running),
+            'started_at': int(self._flow_started_at or 0),
+            'elapsed_secs': max(0, now - int(self._flow_started_at or now)),
+            'result': self._flow_last_result,
+            'error': self._flow_last_error,
+        }
+
+    async def verify_two_node_flow_status(self, request):
+        """Get latest two-node verification flow status/result."""
+        return json_response(await self._build_flow_status())
     
     def _get_difficulty(self) -> float:
         """Get current difficulty."""
@@ -669,16 +699,40 @@ class MiningWalletDashboard:
                     const out = document.getElementById('flowResult');
                     out.textContent = 'Running verification flow...';
                     try {
-                        const resp = await fetch('/api/interface/verify-two-node-flow', {method: 'POST'});
-                        const data = await resp.json();
-                        out.textContent = JSON.stringify(data, null, 2);
+                        await fetch('/api/interface/verify-two-node-flow', {method: 'POST'});
+                        await updateFlowStatus();
                     } catch (e) {
                         out.textContent = 'Verification failed: ' + e;
                     }
                 }
+
+                async function updateFlowStatus() {
+                    const out = document.getElementById('flowResult');
+                    try {
+                        const resp = await fetch('/api/interface/verify-two-node-flow');
+                        const data = await resp.json();
+                        if (data.running) {
+                            out.textContent = `Running verification flow... (${data.elapsed_secs}s)`;
+                            return;
+                        }
+                        if (data.result) {
+                            out.textContent = JSON.stringify(data.result, null, 2);
+                            return;
+                        }
+                        if (data.error) {
+                            out.textContent = 'Verification failed: ' + data.error;
+                            return;
+                        }
+                        out.textContent = 'Not started.';
+                    } catch (e) {
+                        out.textContent = 'Verification status error: ' + e;
+                    }
+                }
                 
                 updateStatus();
+                updateFlowStatus();
                 setInterval(updateStatus, 3000);
+                setInterval(updateFlowStatus, 1500);
             </script>
         </body>
         </html>
