@@ -4,7 +4,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from datetime import datetime
 from ..core.block import Block, BlockHeader
 from ..core.transaction import Transaction
-from ..utils.time import median_time_past, is_timestamp_valid
+from ..utils.time import current_time, median_time_past
 from .params import ConsensusParams
 
 class ConsensusRules:
@@ -23,7 +23,10 @@ class ConsensusRules:
     def validate_block_header(self, header: BlockHeader, prev_header: Optional[BlockHeader] = None) -> bool:
         if header.version < 1 or header.version > 0x20000000:
             raise ValueError(f"Invalid version: {header.version}")
-        if not is_timestamp_valid(header.timestamp, 7200):
+        # Consensus: headers must not be too far in the future.
+        # Historical blocks (including genesis) are valid, so do not enforce
+        # a "not too old vs now" bound.
+        if int(header.timestamp) > int(current_time()) + 7200:
             raise ValueError(f"Invalid timestamp: {header.timestamp}")
         if prev_header:
             pass
