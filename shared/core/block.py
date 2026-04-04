@@ -1,7 +1,6 @@
 """Block structure for BerzCoin."""
 
 from typing import List, Optional, Tuple
-from datetime import datetime
 from .transaction import Transaction
 from .hashes import hash256
 from .serialization import Serializer

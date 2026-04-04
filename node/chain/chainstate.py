@@ -1,6 +1,5 @@
 """Active chain state management."""
 
-import time
 from typing import Optional, List, Dict, Any
 from shared.core.block import Block, BlockHeader
 from shared.core.transaction import Transaction
@@ -109,9 +108,10 @@ class ChainState:
         txid = coinbase_tx.txid()
         mr = merkle_root([txid]) or (b"\x00" * 32)
 
-        # Make genesis PoW very easy so import is fast on first run.
-        genesis_bits = self.pow.get_bits(self.params.pow_limit)
-        genesis_timestamp = int(time.time())
+        # Keep regtest genesis deterministic across machines/runs so nodes can peer.
+        # Using wall-clock time here creates different height-0 blocks per node.
+        genesis_bits = int(self.params.genesis_bits)
+        genesis_timestamp = int(self.params.genesis_time)
 
         header = BlockHeader(
             version=self.params.genesis_version,
