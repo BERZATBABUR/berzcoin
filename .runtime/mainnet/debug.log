@@ -1,0 +1,167 @@
+2026-04-05 23:19:22 - berzcoin - INFO - Connected to database: /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/mainnet/mainnet.db
+2026-04-05 23:19:22 - berzcoin - INFO - Current version: 0, Target version: 7
+2026-04-05 23:19:22 - berzcoin - INFO - Applying migration 1: Initial schema
+2026-04-05 23:19:22 - berzcoin - INFO - Applying migration 2: Add address indexes
+2026-04-05 23:19:22 - berzcoin - INFO - Applying migration 3: Add chainwork to block_headers
+2026-04-05 23:19:22 - berzcoin - INFO - Applying migration 4: Add witness data to inputs
+2026-04-05 23:19:22 - berzcoin - INFO - Applying migration 5: Add transaction weight
+2026-04-05 23:19:22 - berzcoin - INFO - Applying migration 6: Transaction index tables (tx_index, tx_inputs, tx_outputs)
+2026-04-05 23:19:22 - berzcoin - INFO - Applying migration 7: Allow non-unique block heights for fork branch persistence
+2026-04-05 23:19:22 - berzcoin - INFO - Migration complete. Now at version 7
+2026-04-05 23:19:22 - berzcoin - INFO - Loaded 0 blocks from index
+2026-04-05 23:19:22 - berzcoin - INFO - Chain state initialized: height=-1, work=0
+2026-04-05 23:19:22 - berzcoin - INFO - No mempool snapshot found
+2026-04-05 23:19:22 - berzcoin - INFO - Peer discovery sources priority: connect=0 addnode=0 bootstrap=0 dns=0
+2026-04-05 23:19:22 - berzcoin - WARNING - Using insecure fallback wallet encryption passphrase; set wallet_encryption_passphrase
+2026-04-05 23:19:22 - berzcoin - INFO - Secure RPC cookie created: /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/mainnet/.cookie
+2026-04-05 23:19:22 - berzcoin - INFO - Node initialized successfully
+2026-04-05 23:19:22 - berzcoin - INFO - Starting BerzCoin node...
+2026-04-05 23:19:22 - berzcoin - ERROR - Failed to start P2P listener: could not bind on any address out of [('0.0.0.0', 8333)]
+2026-04-05 23:19:22 - berzcoin - INFO - Connection manager started
+2026-04-05 23:20:01 - berzcoin - INFO - Connected to database: /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/mainnet/mainnet.db
+2026-04-05 23:20:01 - berzcoin - INFO - Current version: 0, Target version: 7
+2026-04-05 23:20:01 - berzcoin - INFO - Applying migration 1: Initial schema
+2026-04-05 23:20:01 - berzcoin - INFO - Applying migration 2: Add address indexes
+2026-04-05 23:20:01 - berzcoin - INFO - Applying migration 3: Add chainwork to block_headers
+2026-04-05 23:20:01 - berzcoin - INFO - Applying migration 4: Add witness data to inputs
+2026-04-05 23:20:01 - berzcoin - INFO - Applying migration 5: Add transaction weight
+2026-04-05 23:20:01 - berzcoin - INFO - Applying migration 6: Transaction index tables (tx_index, tx_inputs, tx_outputs)
+2026-04-05 23:20:01 - berzcoin - INFO - Applying migration 7: Allow non-unique block heights for fork branch persistence
+2026-04-05 23:20:01 - berzcoin - INFO - Migration complete. Now at version 7
+2026-04-05 23:20:01 - berzcoin - INFO - Loaded 0 blocks from index
+2026-04-05 23:20:01 - berzcoin - INFO - Chain state initialized: height=-1, work=0
+2026-04-05 23:20:01 - berzcoin - INFO - No mempool snapshot found
+2026-04-05 23:20:01 - berzcoin - INFO - Peer discovery sources priority: connect=0 addnode=0 bootstrap=0 dns=0
+2026-04-05 23:20:01 - berzcoin - WARNING - Using insecure fallback wallet encryption passphrase; set wallet_encryption_passphrase
+2026-04-05 23:20:01 - berzcoin - INFO - Loaded existing RPC cookie from /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/mainnet/.cookie
+2026-04-05 23:20:01 - berzcoin - INFO - Node initialized successfully
+2026-04-05 23:20:01 - berzcoin - INFO - Starting BerzCoin node...
+2026-04-05 23:20:01 - berzcoin - INFO - P2P listener started on 0.0.0.0:18444
+2026-04-05 23:20:01 - berzcoin - INFO - Connection manager started
+2026-04-05 23:20:01 - berzcoin - INFO - RPC server started on http://127.0.0.1:18443
+2026-04-05 23:20:01 - berzcoin - INFO - Chain empty, running bootstrap...
+2026-04-05 23:20:01 - berzcoin - INFO - Starting full chain sync...
+2026-04-05 23:20:01 - berzcoin - WARNING - No peers available for sync
+2026-04-05 23:20:01 - berzcoin - WARNING - No blocks available for replay
+2026-04-05 23:20:01 - berzcoin - INFO - Node started
+2026-04-05 23:20:01 - berzcoin - INFO - Starting block sync loop
+2026-04-05 23:20:11 - berzcoin - INFO - Stopping BerzCoin node...
+2026-04-05 23:20:11 - berzcoin - INFO - RPC server stopped
+2026-04-05 23:20:11 - berzcoin - INFO - Connection manager stopped
+2026-04-05 23:20:11 - berzcoin - INFO - Saved 0 transactions to mempool.dat
+2026-04-05 23:20:11 - berzcoin - INFO - Database connection closed
+2026-04-05 23:20:11 - berzcoin - INFO - Node stopped
+2026-04-05 23:20:34 - berzcoin - INFO - Connected to database: /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/mainnet/mainnet.db
+2026-04-05 23:20:34 - berzcoin - INFO - Current version: 0, Target version: 7
+2026-04-05 23:20:34 - berzcoin - INFO - Applying migration 1: Initial schema
+2026-04-05 23:20:34 - berzcoin - INFO - Applying migration 2: Add address indexes
+2026-04-05 23:20:34 - berzcoin - INFO - Applying migration 3: Add chainwork to block_headers
+2026-04-05 23:20:34 - berzcoin - INFO - Applying migration 4: Add witness data to inputs
+2026-04-05 23:20:34 - berzcoin - INFO - Applying migration 5: Add transaction weight
+2026-04-05 23:20:34 - berzcoin - INFO - Applying migration 6: Transaction index tables (tx_index, tx_inputs, tx_outputs)
+2026-04-05 23:20:34 - berzcoin - INFO - Applying migration 7: Allow non-unique block heights for fork branch persistence
+2026-04-05 23:20:34 - berzcoin - INFO - Migration complete. Now at version 7
+2026-04-05 23:20:34 - berzcoin - INFO - Loaded 0 blocks from index
+2026-04-05 23:20:34 - berzcoin - INFO - Chain state initialized: height=-1, work=0
+2026-04-05 23:20:34 - berzcoin - INFO - Mempool restore complete: restored=0 dropped={}
+2026-04-05 23:20:34 - berzcoin - INFO - Peer discovery sources priority: connect=0 addnode=0 bootstrap=0 dns=0
+2026-04-05 23:20:34 - berzcoin - WARNING - Using insecure fallback wallet encryption passphrase; set wallet_encryption_passphrase
+2026-04-05 23:20:34 - berzcoin - INFO - Loaded existing RPC cookie from /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/mainnet/.cookie
+2026-04-05 23:20:34 - berzcoin - INFO - Node initialized successfully
+2026-04-05 23:20:34 - berzcoin - INFO - Starting BerzCoin node...
+2026-04-05 23:20:34 - berzcoin - INFO - P2P listener started on 0.0.0.0:18444
+2026-04-05 23:20:34 - berzcoin - INFO - Connection manager started
+2026-04-05 23:20:34 - berzcoin - INFO - RPC server started on http://127.0.0.1:18443
+2026-04-05 23:20:34 - berzcoin - INFO - Chain empty, running bootstrap...
+2026-04-05 23:20:34 - berzcoin - INFO - Starting full chain sync...
+2026-04-05 23:20:34 - berzcoin - WARNING - No peers available for sync
+2026-04-05 23:20:34 - berzcoin - WARNING - No blocks available for replay
+2026-04-05 23:20:34 - berzcoin - INFO - Node started
+2026-04-05 23:20:34 - berzcoin - INFO - Starting block sync loop
+2026-04-05 23:21:48 - berzcoin - INFO - Stopping BerzCoin node...
+2026-04-05 23:21:48 - berzcoin - INFO - RPC server stopped
+2026-04-05 23:21:48 - berzcoin - INFO - Connection manager stopped
+2026-04-05 23:21:48 - berzcoin - INFO - Saved 0 transactions to mempool.dat
+2026-04-05 23:21:48 - berzcoin - INFO - Database connection closed
+2026-04-05 23:21:48 - berzcoin - INFO - Node stopped
+2026-04-05 23:22:14 - berzcoin - INFO - Connected to database: /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/mainnet/mainnet.db
+2026-04-05 23:22:14 - berzcoin - INFO - Current version: 0, Target version: 7
+2026-04-05 23:22:14 - berzcoin - INFO - Applying migration 1: Initial schema
+2026-04-05 23:22:14 - berzcoin - INFO - Applying migration 2: Add address indexes
+2026-04-05 23:22:14 - berzcoin - INFO - Applying migration 3: Add chainwork to block_headers
+2026-04-05 23:22:14 - berzcoin - INFO - Applying migration 4: Add witness data to inputs
+2026-04-05 23:22:14 - berzcoin - INFO - Applying migration 5: Add transaction weight
+2026-04-05 23:22:14 - berzcoin - INFO - Applying migration 6: Transaction index tables (tx_index, tx_inputs, tx_outputs)
+2026-04-05 23:22:14 - berzcoin - INFO - Applying migration 7: Allow non-unique block heights for fork branch persistence
+2026-04-05 23:22:14 - berzcoin - INFO - Migration complete. Now at version 7
+2026-04-05 23:22:14 - berzcoin - INFO - Loaded 0 blocks from index
+2026-04-05 23:22:14 - berzcoin - INFO - Chain state initialized: height=-1, work=0
+2026-04-05 23:22:14 - berzcoin - INFO - Mempool restore complete: restored=0 dropped={}
+2026-04-05 23:22:14 - berzcoin - INFO - Peer discovery sources priority: connect=0 addnode=0 bootstrap=0 dns=3
+2026-04-05 23:22:14 - berzcoin - WARNING - Using insecure fallback wallet encryption passphrase; set wallet_encryption_passphrase
+2026-04-05 23:22:14 - berzcoin - INFO - Loaded existing RPC cookie from /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/mainnet/.cookie
+2026-04-05 23:22:14 - berzcoin - INFO - Node initialized successfully
+2026-04-05 23:22:14 - berzcoin - INFO - Starting BerzCoin node...
+2026-04-05 23:22:14 - berzcoin - INFO - P2P listener started on 0.0.0.0:18444
+2026-04-05 23:22:14 - berzcoin - INFO - Connection manager started
+2026-04-05 23:22:14 - berzcoin - INFO - RPC server started on http://127.0.0.1:18443
+2026-04-05 23:22:14 - berzcoin - INFO - Chain empty, running bootstrap...
+2026-04-05 23:22:14 - berzcoin - INFO - Starting full chain sync...
+2026-04-05 23:22:14 - berzcoin - WARNING - No peers available for sync
+2026-04-05 23:22:14 - berzcoin - WARNING - No blocks available for replay
+2026-04-05 23:22:14 - berzcoin - INFO - Node started
+2026-04-05 23:22:14 - berzcoin - INFO - Starting block sync loop
+2026-04-05 23:22:14 - berzcoin - ERROR - DNS seed failed for seed-mainnet-1.berzcoin.net: [Errno -2] Name or service not known
+2026-04-05 23:22:14 - berzcoin - ERROR - DNS seed failed for seed-mainnet-2.berzcoin.net: [Errno -2] Name or service not known
+2026-04-05 23:22:14 - berzcoin - ERROR - DNS seed failed for seed-mainnet-3.berzcoin.net: [Errno -2] Name or service not known
+2026-04-05 23:22:22 - berzcoin - INFO - Peer version: 70015, user agent: /BerzCoin:1.0/, height: 0
+2026-04-05 23:22:22 - berzcoin - INFO - Handshake complete with 127.0.0.1
+2026-04-05 23:22:22 - berzcoin - INFO - Inbound connection from 127.0.0.1:37800
+2026-04-05 23:22:44 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:22:44 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:23:14 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:23:14 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:23:44 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:23:44 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:24:14 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:24:14 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:24:44 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:24:44 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:25:14 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:25:14 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:25:44 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:25:44 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:26:14 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:26:14 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:26:44 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:26:44 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:27:14 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:27:14 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:27:14 - berzcoin - ERROR - DNS seed failed for seed-mainnet-1.berzcoin.net: [Errno -2] Name or service not known
+2026-04-05 23:27:15 - berzcoin - ERROR - DNS seed failed for seed-mainnet-2.berzcoin.net: [Errno -2] Name or service not known
+2026-04-05 23:27:15 - berzcoin - ERROR - DNS seed failed for seed-mainnet-3.berzcoin.net: [Errno -2] Name or service not known
+2026-04-05 23:27:44 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:27:44 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:28:14 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:28:14 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:28:44 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:28:44 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:29:14 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:29:14 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:29:44 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:29:44 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:30:14 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:30:14 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:30:44 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:30:44 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:31:14 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:31:14 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:31:44 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:31:44 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:32:14 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:32:14 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0
+2026-04-05 23:32:15 - berzcoin - ERROR - DNS seed failed for seed-mainnet-1.berzcoin.net: [Errno -2] Name or service not known
+2026-04-05 23:32:15 - berzcoin - ERROR - DNS seed failed for seed-mainnet-2.berzcoin.net: [Errno -2] Name or service not known
+2026-04-05 23:32:15 - berzcoin - ERROR - DNS seed failed for seed-mainnet-3.berzcoin.net: [Errno -2] Name or service not known
+2026-04-05 23:32:44 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:32:44 - berzcoin - INFO - Syncing from 127.0.0.1:37800: -1 -> 0

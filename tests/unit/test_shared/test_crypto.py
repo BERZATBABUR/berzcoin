@@ -1,6 +1,7 @@
 """Unit tests for crypto components."""
 
 import os
+import random
 import sys
 import unittest
 
@@ -115,6 +116,34 @@ class TestCrypto(unittest.TestCase):
         xonly = key.public_key().to_bytes()[1:33]
         self.assertEqual(len(sig), 64)
         self.assertTrue(verify_schnorr_signature(xonly, msg, sig))
+
+    def test_verify_signature_rejects_trailing_der_bytes(self) -> None:
+        key = PrivateKey(12345)
+        msg = hash256(b"strict der")
+        sig = sign_message_hash(key, msg)
+        bad = sig + b"\x00"
+        self.assertFalse(verify_signature(key.public_key(), msg, bad))
+
+    def test_verify_signature_fuzz_random_bytes_no_crash(self) -> None:
+        key = PrivateKey(12345)
+        pub = key.public_key()
+        msg = hash256(b"fuzz-msg")
+        rnd = random.Random(1337)
+        for _ in range(2000):
+            n = rnd.randint(0, 90)
+            candidate = bytes(rnd.getrandbits(8) for _ in range(n))
+            try:
+                ok = verify_signature(pub, msg, candidate)
+            except Exception as exc:
+                self.fail(f"verify_signature raised unexpectedly: {exc!r}")
+            if ok:
+                # Random bytes should never verify successfully.
+                self.fail("Random signature unexpectedly verified")
+
+    def test_sign_message_hash_requires_32byte_hash(self) -> None:
+        key = PrivateKey(12345)
+        with self.assertRaises(ValueError):
+            sign_message_hash(key, b"short")
 
 
 if __name__ == "__main__":

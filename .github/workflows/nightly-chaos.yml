@@ -1,0 +1,62 @@
+name: Nightly Chaos
+
+on:
+  schedule:
+    - cron: '10 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  nightly-chaos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+          pip install -e .
+
+      - name: Create artifact directory
+        run: mkdir -p artifacts
+
+      - name: Run protocol parser fuzz suite
+        env:
+          BERZ_FUZZ_SAMPLES: '4000'
+          BERZ_FUZZ_SEED: '20260405'
+          BERZ_MEMPOOL_FUZZ_SAMPLES: '2200'
+          BERZ_MEMPOOL_FUZZ_SEED: '20260408'
+        run: |
+          pytest -q tests/fuzz --junitxml artifacts/fuzz-junit.xml
+
+      - name: Run chaos + integration chaos regression
+        env:
+          BERZ_CHAOS_SEED: '20260405'
+          BERZ_CHAOS_STEPS: '1200'
+          BERZ_CHAOS_LONG: '1'
+          BERZ_CHAOS_LONG_STEPS: '6000'
+          BERZ_CHAOS_INTEG_SEED: '20260406'
+          BERZ_CHAOS_INTEG_STEPS: '900'
+          BERZ_MEMPOOL_CHAOS_SEED: '20260407'
+          BERZ_MEMPOOL_CHAOS_STEPS: '2200'
+          BERZ_TEST_ARTIFACT_DIR: artifacts
+        run: |
+          pytest -q tests/chaos tests/integration/test_chaos_regression.py --junitxml artifacts/chaos-junit.xml
+
+      - name: Summarize artifact files
+        run: |
+          find artifacts -maxdepth 3 -type f | sort > artifacts/file-list.txt
+
+      - name: Upload nightly chaos artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-chaos-artifacts
+          path: artifacts
+          retention-days: 14

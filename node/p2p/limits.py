@@ -3,6 +3,27 @@
 import time
 from typing import Dict, List, Tuple
 from collections import defaultdict
+from dataclasses import dataclass
+
+
+class OutboundClass:
+    """Outbound connection classes used for anti-eclipse policy."""
+
+    ANCHOR = "anchor"
+    FULL_RELAY = "full-relay"
+    BLOCK_RELAY_ONLY = "block-relay-only"
+    FEELER = "feeler"
+
+
+@dataclass(frozen=True)
+class OutboundPolicy:
+    """High-level outbound policy knobs for hardened mode."""
+
+    min_anchor_netgroups: int = 2
+    target_anchor_peers: int = 2
+    target_block_relay_only_peers: int = 2
+    feeler_interval_secs: int = 120
+    rotation_interval_secs: int = 30
 
 class RateLimiter:
     def __init__(self, max_messages: int = 100, time_window: int = 60):

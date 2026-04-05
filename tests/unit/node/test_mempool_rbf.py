@@ -4,6 +4,7 @@ import asyncio
 import unittest
 
 from node.mempool.pool import Mempool
+from node.mempool.limits import MempoolLimits
 from shared.core.hashes import hash160
 from shared.core.transaction import Transaction, TxIn, TxOut
 from shared.crypto.keys import PrivateKey
@@ -74,6 +75,30 @@ class TestMempoolRBF(unittest.TestCase):
             self.assertTrue(await mempool.add_transaction(new_tx))
             self.assertNotIn(old_tx.txid().hex(), mempool.transactions)
             self.assertIn(new_tx.txid().hex(), mempool.transactions)
+
+        asyncio.run(run())
+
+    def test_rbf_rejects_when_replacement_complexity_exceeds_budget(self) -> None:
+        async def run() -> None:
+            key = PrivateKey()
+            pub = key.public_key().to_bytes()
+            prev_txid = "88" * 32
+            utxo = {
+                "value": 300_000,
+                "script_pubkey": _p2pkh_script(hash160(pub)),
+            }
+            chainstate = _ChainStateStub({(prev_txid, 0): utxo}, {prev_txid})
+            # Tight replacement complexity budget via package-weight/4 guard.
+            limits = MempoolLimits(max_package_weight=200)
+            mempool = Mempool(chainstate, limits=limits)
+
+            old_tx = _signed_spend(key, prev_txid, 300_000, 290_000, sequence=0xFFFFFFFD)
+            new_tx = _signed_spend(key, prev_txid, 300_000, 280_000, sequence=0xFFFFFFFD)
+
+            self.assertTrue(await mempool.add_transaction(old_tx))
+            self.assertFalse(await mempool.add_transaction(new_tx))
+            self.assertEqual(mempool.last_reject_reason, "rbf_policy")
+            self.assertIn(old_tx.txid().hex(), mempool.transactions)
 
         asyncio.run(run())
 

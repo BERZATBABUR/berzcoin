@@ -1,0 +1,80 @@
+name: RC Soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: "Release candidate tag (e.g., v2.0.0-rc1)"
+        required: true
+        default: "v2.0.0-rc1"
+      soak_hours:
+        description: "Duration for each run in hours"
+        required: true
+        type: choice
+        options:
+          - "24"
+          - "72"
+        default: "24"
+      required_passes:
+        description: "Consecutive passing runs required"
+        required: true
+        default: "3"
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4400
+    strategy:
+      fail-fast: false
+      matrix:
+        seed_mode: [fixed, rotating]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+          pip install -e .
+
+      - name: Execute required consecutive soak runs
+        env:
+          RC_TAG: ${{ github.event.inputs.rc_tag }}
+          SOAK_HOURS: ${{ github.event.inputs.soak_hours }}
+          REQUIRED_PASSES: ${{ github.event.inputs.required_passes }}
+          SEED_MODE: ${{ matrix.seed_mode }}
+          SOAK_ARTIFACT_BASE: artifacts/rc-soak
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 "${REQUIRED_PASSES}"); do
+            echo "Starting soak run ${i}/${REQUIRED_PASSES} seed_mode=${SEED_MODE}"
+            scripts/release_candidate_soak.sh \
+              --rc-tag "${RC_TAG}" \
+              --hours "${SOAK_HOURS}" \
+              --iterations 1 \
+              --seed-mode "${SEED_MODE}"
+          done
+
+      - name: Assert latest runs are consecutive passes
+        env:
+          RC_TAG: ${{ github.event.inputs.rc_tag }}
+          REQUIRED_PASSES: ${{ github.event.inputs.required_passes }}
+        run: |
+          python scripts/assert_soak_consecutive_passes.py \
+            --artifact-base artifacts/rc-soak \
+            --rc-tag "${RC_TAG}" \
+            --required-passes "${REQUIRED_PASSES}"
+
+      - name: Upload RC soak artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc-soak-${{ github.event.inputs.rc_tag }}-${{ matrix.seed_mode }}-${{ github.run_id }}
+          path: artifacts/rc-soak/${{ github.event.inputs.rc_tag }}
+          retention-days: 30

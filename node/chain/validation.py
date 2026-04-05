@@ -3,6 +3,11 @@
 from typing import Optional, List
 from shared.core.block import Block, BlockHeader
 from shared.core.transaction import Transaction
+from shared.consensus.buried_deployments import (
+    HARDFORK_TX_V2,
+    SOFTFORK_BIP34_STRICT,
+    is_consensus_feature_active,
+)
 from shared.consensus.params import ConsensusParams
 from shared.consensus.rules import ConsensusRules
 from shared.consensus.pow import ProofOfWork
@@ -50,7 +55,8 @@ class BlockValidator:
         return True
 
     def validate_header(self, header: BlockHeader, height: int) -> bool:
-        if header.version < 1 or header.version > 0x20000000:
+        # Allow BIP9-style versionbits in top-bit "001" namespace.
+        if header.version < 1 or header.version > 0x3fffffff:
             logger.error(f"Invalid version: {header.version}")
             return False
         if not self.pow.validate(header):
@@ -152,6 +158,11 @@ class BlockValidator:
         return True
 
     def validate_transaction(self, tx: Transaction, height: int, is_coinbase: bool) -> bool:
+        if is_consensus_feature_active(self.params, HARDFORK_TX_V2, height):
+            if int(getattr(tx, "version", 1)) < 2:
+                logger.error("Transaction version below hardfork_v2 minimum")
+                return False
+
         if tx.is_coinbase() != is_coinbase:
             logger.error("Invalid coinbase status")
             return False
@@ -233,7 +244,20 @@ class BlockValidator:
             if len(script) < len(height_bytes):
                 logger.error("Coinbase script too short for height")
                 return False
-            if script[0] != len(height_bytes):
+            strict_bip34 = is_consensus_feature_active(
+                self.params, SOFTFORK_BIP34_STRICT, height
+            )
+            if strict_bip34:
+                if len(script) < 1 + len(height_bytes):
+                    logger.error("Coinbase script too short for strict BIP34")
+                    return False
+                if script[0] != len(height_bytes):
+                    logger.error("Coinbase height push length mismatch")
+                    return False
+                if script[1:1 + len(height_bytes)] != height_bytes:
+                    logger.error("Coinbase height not minimally encoded at script start")
+                    return False
+            elif script[0] != len(height_bytes):
                 logger.warning("Coinbase height not properly encoded")
         return True
 

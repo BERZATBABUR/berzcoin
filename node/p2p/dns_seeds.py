@@ -9,12 +9,30 @@ from shared.utils.logging import get_logger
 logger = get_logger()
 
 class DNSSeeds:
-    # No hardcoded seeds by default; operators should provide `dnsseeds`
-    # in config or supply a `bootstrap_nodes.json` in the datadir.
-    DEFAULT_SEEDS: list = []
+    # Network-profile defaults for operator bootstrap safety.
+    # Operators can always override with `dnsseeds=...` in config.
+    DEFAULT_SEEDS_BY_NETWORK = {
+        "mainnet": [
+            "seed-mainnet-1.berzcoin.net",
+            "seed-mainnet-2.berzcoin.net",
+            "seed-mainnet-3.berzcoin.net",
+        ],
+        "testnet": [
+            "seed-testnet-1.berzcoin.net",
+            "seed-testnet-2.berzcoin.net",
+        ],
+        # Regtest remains manual/explicit by design.
+        "regtest": [],
+    }
 
-    def __init__(self, seeds: List[str] = None, timeout: int = 5):
-        self.seeds = seeds or self.DEFAULT_SEEDS
+    @classmethod
+    def default_seeds_for_network(cls, network: str) -> List[str]:
+        name = str(network or "mainnet").strip().lower()
+        return list(cls.DEFAULT_SEEDS_BY_NETWORK.get(name, cls.DEFAULT_SEEDS_BY_NETWORK["mainnet"]))
+
+    def __init__(self, seeds: List[str] = None, timeout: int = 5, network: str = "mainnet"):
+        self.network = str(network or "mainnet").strip().lower()
+        self.seeds = list(seeds) if seeds is not None else self.default_seeds_for_network(self.network)
         self.timeout = timeout
         self.cache: List[str] = []
         self.last_refresh = 0

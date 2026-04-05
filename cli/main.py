@@ -103,6 +103,8 @@ class BerzCoinCLI:
 
         if args.command == 'getmempoolinfo':
             return await handler.mempool.get_mempool_info()
+        if args.command == 'getmempooldiagnostics':
+            return await handler.mempool.get_mempool_diagnostics(getattr(args, "top_n", 20))
         if args.command == 'getrawmempool':
             return await handler.mempool.get_raw_mempool(getattr(args, "verbose", False))
         if args.command == 'sendrawtransaction':
@@ -111,6 +113,8 @@ class BerzCoinCLI:
             return await handler.mempool.test_mempool_accept(args.hexstrings)
         if args.command == 'getmempoolentry':
             return await handler.mempool.get_mempool_entry(args.txid)
+        if args.command == 'submitpackage':
+            return await handler.mempool.submit_package(args.hexstrings)
 
         if args.command == 'getwalletinfo':
             return await handler.wallet.get_wallet_info()
@@ -139,6 +143,20 @@ class BerzCoinCLI:
             return await handler.wallet.create_wallet(args.name)
         if args.command == 'activatewallet':
             return await handler.wallet.activate_wallet(args.private_key)
+        if args.command == 'walletpassphrase':
+            return await handler.wallet.wallet_passphrase(args.passphrase, args.timeout)
+        if args.command == 'walletlock':
+            return await handler.wallet.wallet_lock()
+        if args.command == 'importxpubwatchonly':
+            return await handler.wallet.import_xpub_watchonly(args.xpub, args.label)
+        if args.command == 'walletcreatefundedpsbt':
+            return await handler.wallet.wallet_create_funded_psbt(args.address, args.amount, getattr(args, 'feerate', None))
+        if args.command == 'walletprocesspsbt':
+            return await handler.wallet.wallet_process_psbt(args.psbt, args.sign == 'true')
+        if args.command == 'finalizepsbt':
+            return await handler.wallet.finalize_psbt(args.psbt)
+        if args.command == 'createmultisigpolicy':
+            return await handler.wallet.create_multisig_policy(args.required, args.pubkeys, args.label)
 
         if args.command == 'getmininginfo':
             return await handler.mining.get_mining_info()

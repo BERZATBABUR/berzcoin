@@ -5,6 +5,7 @@ import asyncio
 from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from shared.core.transaction import Transaction
+from shared.consensus.buried_deployments import HARDFORK_TX_V2, is_consensus_feature_active
 from shared.consensus.weights import calculate_transaction_weight
 from shared.protocol.messages import InvMessage
 from shared.script.verify import verify_input_script
@@ -55,6 +56,68 @@ class Mempool:
         self.total_fee = 0
         # Last rejection reason for the most recent failed add_transaction attempt
         self.last_reject_reason: Optional[str] = None
+        # Policy telemetry (P0 safety lock):
+        # - reject reason counters
+        # - eviction reason counters
+        # - current minimum fee floor gauge (sat/vB)
+        self.reject_reason_counts: Dict[str, int] = {}
+        self.eviction_reason_counts: Dict[str, int] = {}
+        self.min_fee_floor_rate: float = float(getattr(self.policy, "min_relay_fee", 0))
+        self._min_fee_floor_half_life_secs: float = 10.0 * 60.0
+        self._min_fee_floor_last_update: float = time.time()
+
+    def _record_reject(self, reason: Optional[str]) -> str:
+        text = str(reason or "unknown_reject")
+        self.last_reject_reason = text
+        self.reject_reason_counts[text] = int(self.reject_reason_counts.get(text, 0)) + 1
+        return text
+
+    def _record_eviction(self, reason: str, count: int = 1) -> None:
+        text = str(reason or "unknown_eviction")
+        self.eviction_reason_counts[text] = int(self.eviction_reason_counts.get(text, 0)) + int(max(0, count))
+
+    def _decay_min_fee_floor(self, now: Optional[float] = None) -> None:
+        ts = float(now if now is not None else time.time())
+        base_floor = float(getattr(self.policy, "min_relay_fee", 0))
+        elapsed = max(0.0, ts - float(self._min_fee_floor_last_update))
+        if elapsed <= 0:
+            return
+        half_life = max(1.0, float(self._min_fee_floor_half_life_secs))
+        # Exponential decay toward base floor.
+        decay = 0.5 ** (elapsed / half_life)
+        self.min_fee_floor_rate = float(base_floor) + (float(self.min_fee_floor_rate) - float(base_floor)) * decay
+        self._min_fee_floor_last_update = ts
+
+    def _effective_min_fee_floor_rate(self) -> float:
+        self._decay_min_fee_floor()
+        return max(
+            float(getattr(self.policy, "min_relay_fee", 0)),
+            float(self.min_fee_floor_rate),
+        )
+
+    def _update_min_fee_floor(
+        self,
+        candidate_fee_rate: Optional[float] = None,
+        *,
+        under_pressure: bool = False,
+    ) -> None:
+        self._decay_min_fee_floor()
+        base_floor = float(getattr(self.policy, "min_relay_fee", 0))
+        if candidate_fee_rate is None:
+            self.min_fee_floor_rate = max(float(self.min_fee_floor_rate), float(base_floor))
+            return
+        try:
+            candidate = float(candidate_fee_rate)
+            if under_pressure:
+                # Rolling floor bump while saturated; bias upward to deter immediate re-spam.
+                candidate *= 1.10
+            self.min_fee_floor_rate = max(
+                float(base_floor),
+                float(self.min_fee_floor_rate),
+                float(candidate),
+            )
+        except (TypeError, ValueError):
+            self.min_fee_floor_rate = max(float(self.min_fee_floor_rate), float(base_floor))
 
     @staticmethod
     def _virtual_size_from_weight(weight: int) -> int:
@@ -73,12 +136,14 @@ class Mempool:
         """
         ordered = self._sort_package_txs(txs)
         if ordered is None:
+            self._record_reject("package_topology_invalid")
             return {
                 "accepted": False,
                 "added": [],
                 "reject-reason": "package_topology_invalid",
             }
         if len(ordered) > self.limits.max_package_count:
+            self._record_reject("package_too_many_transactions")
             return {
                 "accepted": False,
                 "added": [],
@@ -86,18 +151,42 @@ class Mempool:
             }
         package_weight = sum(calculate_transaction_weight(tx) for tx in ordered)
         if package_weight > self.limits.max_package_weight:
+            self._record_reject("package_too_heavy")
             return {
                 "accepted": False,
                 "added": [],
                 "reject-reason": "package_too_heavy",
             }
+        package_vsize = sum(self._virtual_size_from_weight(calculate_transaction_weight(tx)) for tx in ordered)
+        package_fee = self._estimate_package_fee(ordered)
+        if package_fee is None:
+            self._record_reject("package_missing_parents")
+            return {
+                "accepted": False,
+                "added": [],
+                "reject-reason": "package_missing_parents",
+            }
+        package_fee_rate = (float(package_fee) / float(package_vsize)) if package_vsize > 0 else 0.0
+        effective_floor = self._effective_min_fee_floor_rate()
+        if package_fee_rate < effective_floor:
+            self._record_reject("package_fee_too_low")
+            return {
+                "accepted": False,
+                "added": [],
+                "reject-reason": "package_fee_too_low",
+            }
 
         added: List[str] = []
         for tx in ordered:
-            ok = await self.add_transaction(tx, source_peer=source_peer)
+            ok = await self.add_transaction(
+                tx,
+                source_peer=source_peer,
+                package_min_fee_rate=package_fee_rate,
+            )
             if not ok:
                 for txid in reversed(added):
                     await self.remove_transaction(txid, include_descendants=True)
+                self._record_reject(self.last_reject_reason or "package_rejected")
                 return {
                     "accepted": False,
                     "added": [],
@@ -112,12 +201,17 @@ class Mempool:
             "count": len(added),
         }
 
-    async def add_transaction(self, tx: Transaction, source_peer: Optional[str] = None) -> bool:
+    async def add_transaction(
+        self,
+        tx: Transaction,
+        source_peer: Optional[str] = None,
+        package_min_fee_rate: Optional[float] = None,
+    ) -> bool:
         async with self._lock:
             txid = tx.txid().hex()
             if txid in self.transactions:
                 logger.debug(f"Transaction {txid[:16]} already in mempool")
-                self.last_reject_reason = "already_in_mempool"
+                self._record_reject("already_in_mempool")
                 return False
             fee = await self._calculate_fee(tx)
             size = len(tx.serialize())
@@ -129,37 +223,43 @@ class Mempool:
 
             if conflicting_txids and not self._can_replace(conflicting_txids, tx, fee, vsize, fee_rate):
                 logger.debug("Replacement policy rejected transaction %s", txid[:16])
-                self.last_reject_reason = "rbf_policy"
+                self._record_reject("rbf_policy")
                 return False
 
             if not await self._validate_transaction(tx, ignored_spent_outpoints=ignored_spent):
                 # _validate_transaction logs specifics and may set a reject reason.
-                self.last_reject_reason = self.last_reject_reason or "validation_failed"
+                self._record_reject(self.last_reject_reason or "validation_failed")
                 return False
             if not self.policy.is_standard(tx):
                 logger.debug(f"Transaction {txid[:16]} not standard")
-                self.last_reject_reason = "non_standard"
+                self._record_reject("non_standard")
                 return False
-            if fee < self.policy.get_min_fee_for_vsize(vsize):
-                logger.debug(f"Transaction {txid[:16]} fee too low")
-                self.last_reject_reason = "fee_too_low"
-                return False
+            required_floor_rate = self._effective_min_fee_floor_rate()
+            if float(fee_rate) < float(required_floor_rate):
+                if package_min_fee_rate is not None and float(package_min_fee_rate) >= float(required_floor_rate):
+                    # CPFP package admission: allow low-fee individual tx if package
+                    # aggregate feerate clears active rolling floor.
+                    pass
+                else:
+                    logger.debug(f"Transaction {txid[:16]} fee too low")
+                    self._record_reject("fee_too_low")
+                    return False
             parents = await self._check_dependencies(tx)
             if parents is None:
                 logger.debug(f"Transaction {txid[:16]} has missing parents")
-                self.last_reject_reason = "missing_parents"
+                self._record_reject("missing_parents")
                 return False
             ancestors = self._collect_ancestors(parents)
             if len(ancestors) > self.limits.max_ancestors:
                 logger.debug("Too many ancestors")
-                self.last_reject_reason = "too_many_ancestors"
+                self._record_reject("too_many_ancestors")
                 return False
             ancestor_package_vsize = vsize + sum(
                 self.transactions[a].vsize for a in ancestors if a in self.transactions
             )
             if ancestor_package_vsize > self.limits.max_ancestor_size_vbytes:
                 logger.debug("Ancestor package too large")
-                self.last_reject_reason = "ancestor_package_too_large"
+                self._record_reject("ancestor_package_too_large")
                 return False
             if not self.limits.can_accept(
                 size, weight, len(self.transactions), self.total_size, self.total_weight
@@ -170,7 +270,7 @@ class Mempool:
                 size, weight, len(self.transactions), self.total_size, self.total_weight
             ):
                 logger.debug("Mempool limits reached")
-                self.last_reject_reason = "mempool_limits"
+                self._record_reject("mempool_limits")
                 return False
 
             if conflicting_txids:
@@ -213,7 +313,7 @@ class Mempool:
                     if ancestor in self.transactions:
                         self.transactions[ancestor].descendants.add(txid)
                         if len(self.transactions[ancestor].descendants) > self.limits.max_descendants:
-                            self.last_reject_reason = "too_many_descendants"
+                            self._record_reject("too_many_descendants")
                             # Undo local insertion path via remove_transaction.
                             self._remove_transaction_nolock(txid, include_descendants=False)
                             return False
@@ -226,21 +326,23 @@ class Mempool:
                             )
                         )
                         if descendant_package_vsize > self.limits.max_descendant_size_vbytes:
-                            self.last_reject_reason = "descendant_package_too_large"
+                            self._record_reject("descendant_package_too_large")
                             self._remove_transaction_nolock(txid, include_descendants=False)
                             return False
             logger.info(f"Added transaction {txid[:16]} to mempool (fee: {fee} sat, size: {size})")
         await self._broadcast_tx_inv(tx, source_peer)
         # Clear last_reject_reason on success
         self.last_reject_reason = None
+        self._update_min_fee_floor()
         return True
 
     async def _evict_for_space(self, need_size: int, need_weight: int, incoming_fee_rate: float) -> None:
         """Evict low-fee transactions until limits can accept incoming tx."""
         if not self.transactions:
             return
-        # Lowest fee-rate first.
-        txids = sorted(self.transactions.keys(), key=lambda t: self.transactions[t].fee_rate)
+        # Lowest effective package feerate first (tx + descendants), with deterministic
+        # tie-breakers to avoid eviction instability.
+        txids = sorted(self.transactions.keys(), key=self._eviction_rank)
         for txid in txids:
             if self.limits.can_accept(
                 need_size, need_weight, len(self.transactions), self.total_size, self.total_weight
@@ -249,10 +351,14 @@ class Mempool:
             entry = self.transactions.get(txid)
             if not entry:
                 continue
+            pkg_fee_rate, _pkg_vsize, _pkg_size = self._descendant_package_stats(txid)
             # Do not evict if incoming doesn't outbid the candidate.
-            if incoming_fee_rate <= entry.fee_rate:
+            if incoming_fee_rate <= pkg_fee_rate:
+                self._update_min_fee_floor(pkg_fee_rate, under_pressure=True)
                 break
-            await self.remove_transaction(txid, include_descendants=True)
+            removed = self._remove_transaction_nolock(txid, include_descendants=True)
+            self._record_eviction("mempool_space", len(removed))
+            self._update_min_fee_floor(pkg_fee_rate, under_pressure=True)
 
     async def _broadcast_tx_inv(self, tx: Transaction, source_peer: Optional[str]) -> None:
         if not self.connman:
@@ -287,6 +393,7 @@ class Mempool:
         selected: List[Transaction] = []
         selected_txids: Set[str] = set()
         current_weight = 0
+        next_height = int(self.chainstate.get_best_height()) + 1
 
         while True:
             best_pkg: Optional[List[str]] = None
@@ -297,6 +404,14 @@ class Mempool:
                     continue
                 pkg_ids = self._get_unselected_ancestor_package(txid, selected_txids)
                 if not pkg_ids:
+                    continue
+                if any(
+                    not self._is_consensus_tx_valid_for_height(
+                        self.transactions[t].tx, next_height, set_reason=False
+                    )
+                    for t in pkg_ids
+                    if t in self.transactions
+                ):
                     continue
                 pkg_weight = sum(self.transactions[t].weight for t in pkg_ids if t in self.transactions)
                 if pkg_weight <= 0 or current_weight + pkg_weight > max_weight:
@@ -353,18 +468,24 @@ class Mempool:
                 own_inputs = {(txin.prev_tx_hash.hex(), int(txin.prev_tx_index)) for txin in tx.vin}
                 if not await self._validate_transaction(tx, ignored_spent_outpoints=own_inputs):
                     removed.extend(self._remove_transaction_nolock(txid, include_descendants=True))
+                    self._record_eviction("reorg_revalidation_invalid", 1)
                     continue
                 parents = await self._check_dependencies(tx)
                 if parents is None:
                     removed.extend(self._remove_transaction_nolock(txid, include_descendants=True))
+                    self._record_eviction("reorg_missing_parents", 1)
                     continue
                 if not self.policy.is_standard(tx):
                     removed.extend(self._remove_transaction_nolock(txid, include_descendants=True))
+                    self._record_eviction("reorg_non_standard", 1)
                     continue
                 fee = await self._calculate_fee(tx)
                 tx_vsize = self._virtual_size_from_weight(calculate_transaction_weight(tx))
                 if fee < self.policy.get_min_fee_for_vsize(tx_vsize):
                     removed.extend(self._remove_transaction_nolock(txid, include_descendants=True))
+                    self._record_eviction("reorg_fee_too_low", 1)
+                    floor = (fee / tx_vsize) if tx_vsize > 0 else 0.0
+                    self._update_min_fee_floor(floor)
                     continue
         return removed
 
@@ -381,6 +502,11 @@ class Mempool:
         if not tx.vin or not tx.vout:
             logger.debug("Transaction missing inputs or outputs")
             self.last_reject_reason = "bad_tx_shape"
+            return False
+
+        next_height = int(self.chainstate.get_best_height()) + 1
+        if not self._is_consensus_tx_valid_for_height(tx, next_height):
+            self.last_reject_reason = self.last_reject_reason or "consensus_rule_invalid"
             return False
 
         params = getattr(self.chainstate, "params", None)
@@ -463,6 +589,35 @@ class Mempool:
             return False
         return True
 
+    def _is_consensus_tx_valid_for_height(
+        self,
+        tx: Transaction,
+        height: int,
+        set_reason: bool = True,
+    ) -> bool:
+        params = getattr(self.chainstate, "params", None)
+        if params is None:
+            return True
+
+        # Fast-path custom hard-fork gate used in this repo.
+        if is_consensus_feature_active(params, HARDFORK_TX_V2, int(height)):
+            if int(getattr(tx, "version", 1)) < 2:
+                if set_reason:
+                    self.last_reject_reason = "consensus_tx_version_too_low"
+                return False
+
+        # Keep parity with shared consensus rules when available.
+        rules = getattr(self.chainstate, "rules", None)
+        validate_tx = getattr(rules, "validate_transaction", None)
+        if callable(validate_tx):
+            try:
+                validate_tx(tx, int(height))
+            except Exception:
+                if set_reason:
+                    self.last_reject_reason = "consensus_rule_invalid"
+                return False
+        return True
+
     async def _calculate_fee(self, tx: Transaction) -> int:
         total_input = 0
         total_output = sum(txout.value for txout in tx.vout)
@@ -542,6 +697,40 @@ class Mempool:
                         queue.append(descendant)
         return descendants
 
+    def _descendant_package_stats(self, txid: str) -> Tuple[float, int, int]:
+        """Return (package_fee_rate, package_vsize, package_count) for tx+descendants."""
+        members = {txid}
+        members.update(self._get_descendants(txid))
+        package_fee = 0
+        package_vsize = 0
+        package_count = 0
+        for member in members:
+            entry = self.transactions.get(member)
+            if not entry:
+                continue
+            package_fee += int(entry.fee)
+            package_vsize += int(entry.vsize)
+            package_count += 1
+        if package_vsize <= 0:
+            return 0.0, 0, package_count
+        return float(package_fee) / float(package_vsize), int(package_vsize), int(package_count)
+
+    def _eviction_rank(self, txid: str) -> Tuple[float, float, int, str]:
+        """Deterministic eviction ordering with package impact awareness."""
+        entry = self.transactions.get(txid)
+        if not entry:
+            return (float("inf"), float("inf"), 0, str(txid))
+        package_rate, package_vsize, _package_count = self._descendant_package_stats(txid)
+        direct_rate = float(entry.fee_rate)
+        # Evict lowest package feerate first, then lowest direct feerate.
+        # If still tied, evict larger package first (frees more room), then txid.
+        return (
+            float(package_rate),
+            float(direct_rate),
+            -int(package_vsize),
+            str(txid),
+        )
+
     def _collect_ancestors(self, parents: Optional[Set[str]]) -> Set[str]:
         if not parents:
             return set()
@@ -604,18 +793,20 @@ class Mempool:
         tx_by_id: Dict[str, Transaction] = {tx.txid().hex(): tx for tx in txs}
         unresolved = set(tx_by_id.keys())
         ordered: List[Transaction] = []
+        ordered_ids: Set[str] = set()
 
         while unresolved:
             progressed = False
-            for txid in list(unresolved):
+            for txid in sorted(unresolved):
                 tx = tx_by_id[txid]
                 deps: Set[str] = set()
                 for txin in tx.vin:
                     parent = txin.prev_tx_hash.hex()
                     if parent in tx_by_id:
                         deps.add(parent)
-                if deps.issubset({t.txid().hex() for t in ordered}):
+                if deps.issubset(ordered_ids):
                     ordered.append(tx)
+                    ordered_ids.add(txid)
                     unresolved.remove(txid)
                     progressed = True
             if not progressed:
@@ -691,6 +882,10 @@ class Mempool:
         conflict_entries = [self.transactions[c] for c in replacement_set if c in self.transactions]
         if not conflict_entries:
             return True
+        replacement_total_vsize = sum(max(1, int(e.vsize)) for e in conflict_entries)
+        if replacement_total_vsize > max(1, int(self.limits.max_package_weight // 4)):
+            # Bound replacement complexity to package-size policy budget.
+            return False
         # BIP125 signaling may be inherited from unconfirmed ancestors.
         if any(not self._is_txid_replaceable(c) for c in conflicting_txids):
             return False
@@ -719,9 +914,38 @@ class Mempool:
                 return False
         return True
 
+    def _estimate_package_fee(self, ordered: List[Transaction]) -> Optional[int]:
+        """Estimate aggregate package fee using in-package dependency outputs."""
+        staged_outputs: Dict[Tuple[str, int], int] = {}
+        total_fee = 0
+        for tx in ordered:
+            txid = tx.txid().hex()
+            total_in = 0
+            for txin in tx.vin:
+                prev_txid = txin.prev_tx_hash.hex()
+                prev_index = int(txin.prev_tx_index)
+                outpoint = (prev_txid, prev_index)
+                if outpoint in staged_outputs:
+                    total_in += int(staged_outputs[outpoint])
+                    continue
+                utxo = self.chainstate.get_utxo(prev_txid, prev_index)
+                if not utxo and prev_txid in self.transactions:
+                    parent_entry = self.transactions.get(prev_txid)
+                    if parent_entry and 0 <= prev_index < len(parent_entry.tx.vout):
+                        utxo = {"value": int(parent_entry.tx.vout[prev_index].value)}
+                if not utxo:
+                    return None
+                total_in += int(utxo.get("value", 0))
+            total_out = sum(int(txout.value) for txout in tx.vout)
+            total_fee += int(total_in - total_out)
+            for idx, txout in enumerate(tx.vout):
+                staged_outputs[(txid, idx)] = int(txout.value)
+        return int(total_fee)
+
     async def get_stats(self) -> Dict:
         min_fee_rate = self.transactions[self.tx_by_fee[-1]].fee_rate if self.tx_by_fee else 0
         max_fee_rate = self.transactions[self.tx_by_fee[0]].fee_rate if self.tx_by_fee else 0
+        self._update_min_fee_floor()
         return {
             'size': len(self.transactions),
             'total_size': self.total_size,
@@ -731,5 +955,53 @@ class Mempool:
             'min_fee_rate': min_fee_rate,
             'max_fee_rate': max_fee_rate,
             'avg_fee_rate': self.total_fee / self.total_vsize if self.total_vsize else 0,
+            'policy': {
+                'min_fee_floor_rate': float(self.min_fee_floor_rate),
+                'reject_reason_counts': dict(self.reject_reason_counts),
+                'eviction_reason_counts': dict(self.eviction_reason_counts),
+            },
             'limits': self.limits.get_stats(),
+        }
+
+    def get_policy_thresholds(self) -> Dict[str, object]:
+        """Return operator-facing mempool policy/limit thresholds."""
+        self._update_min_fee_floor()
+        policy_summary = self.policy.get_policy_summary() if hasattr(self.policy, "get_policy_summary") else {}
+        return {
+            "policy": dict(policy_summary),
+            "limits": dict(self.limits.get_stats()),
+            "rolling_fee_floor_rate": float(self.min_fee_floor_rate),
+            "rolling_fee_floor_half_life_secs": float(self._min_fee_floor_half_life_secs),
+            "last_reject_reason": self.last_reject_reason,
+        }
+
+    def get_eviction_snapshot(self, limit: int = 10) -> Dict[str, object]:
+        """Return current eviction ranking candidates for operator diagnostics."""
+        count = max(1, int(limit))
+        candidates = []
+        ranked = sorted(self.transactions.keys(), key=self._eviction_rank)
+        for txid in ranked[:count]:
+            entry = self.transactions.get(txid)
+            if not entry:
+                continue
+            pkg_rate, pkg_vsize, pkg_count = self._descendant_package_stats(txid)
+            candidates.append(
+                {
+                    "txid": txid,
+                    "fee_rate": float(entry.fee_rate),
+                    "package_fee_rate": float(pkg_rate),
+                    "package_vsize": int(pkg_vsize),
+                    "package_count": int(pkg_count),
+                    "age_seconds": float(entry.age),
+                }
+            )
+        return {
+            "candidate_count": len(candidates),
+            "candidates": candidates,
+            "totals": {
+                "txs": int(len(self.transactions)),
+                "size_bytes": int(self.total_size),
+                "vsize": int(self.total_vsize),
+                "weight": int(self.total_weight),
+            },
         }

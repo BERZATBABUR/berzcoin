@@ -1,6 +1,7 @@
 """Unit tests for simple-wallet private-key normalization and activation."""
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -33,6 +34,21 @@ class TestSimpleWalletKeys(unittest.TestCase):
         self.assertEqual(w1.public_key_hex, w2.public_key_hex)
         self.assertEqual(w1.address, w2.address)
         self.assertEqual(w1.mnemonic, w2.mnemonic)
+
+    def test_auto_lock_after_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = SimpleWalletManager(
+                Path(tmp),
+                network="regtest",
+                wallet_passphrase="unit-test-passphrase",
+                default_unlock_timeout_secs=1,
+            )
+            wallet = manager.create_wallet()
+            manager.activate_wallet(wallet.private_key_hex)
+            self.assertTrue(manager.is_wallet_unlocked())
+            time.sleep(1.2)
+            self.assertFalse(manager.is_wallet_unlocked())
+            self.assertIsNone(manager.get_active_private_key())
 
 
 if __name__ == "__main__":

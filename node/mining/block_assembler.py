@@ -5,6 +5,7 @@ from typing import List, Optional, Dict, Any
 
 from shared.core.block import BlockHeader
 from shared.core.transaction import Transaction, TxIn, TxOut
+from shared.consensus.buried_deployments import HARDFORK_TX_V2, is_consensus_feature_active
 from shared.core.merkle import merkle_root
 from shared.consensus.subsidy import get_block_subsidy
 from shared.consensus.weights import calculate_transaction_weight
@@ -72,8 +73,10 @@ class BlockAssembler:
         bits = await self._get_next_bits()
         timestamp = self._calculate_timestamp(tip_header)
 
+        version_getter = getattr(self.chainstate, "get_mining_block_version", None)
+        version = int(version_getter(0x20000000)) if callable(version_getter) else 0x20000000
         header = BlockHeader(
-            version=0x20000000,
+            version=version,
             prev_block_hash=tip_header.hash(),
             merkle_root=merkle_root_hash,
             timestamp=timestamp,
@@ -106,8 +109,16 @@ class BlockAssembler:
     async def _select_transactions(self) -> List[Transaction]:
         if not self.mempool:
             return []
+        available_weight = max(0, int(self.max_weight) - int(self.reserved_weight))
+        get_for_block = getattr(self.mempool, "get_transactions_for_block", None)
+        if callable(get_for_block):
+            return await get_for_block(max_weight=available_weight)
 
-        all_txs = await self.mempool.get_transactions()
+        # Backward-compat fallback for older mempool adapters in tests.
+        get_all = getattr(self.mempool, "get_transactions", None)
+        if not callable(get_all):
+            return []
+        all_txs = await get_all()
 
         txs_with_fees: List[tuple] = []
         for tx in all_txs:
@@ -121,15 +132,12 @@ class BlockAssembler:
 
         selected: List[Transaction] = []
         current_weight = self.reserved_weight
-
         for tx, _ in txs_with_fees:
             tx_weight = calculate_transaction_weight(tx)
-
             if current_weight + tx_weight <= self.max_weight:
                 if await self._ancestors_included(tx, selected):
                     selected.append(tx)
                     current_weight += tx_weight
-
         return selected
 
     def _mempool_fee(self, tx: Transaction) -> Optional[int]:
@@ -155,7 +163,12 @@ class BlockAssembler:
         script_pubkey = builder._create_script_pubkey(address)
         txout = TxOut(value=value, script_pubkey=script_pubkey)
 
-        tx = Transaction(version=1)
+        coinbase_version = 2 if is_consensus_feature_active(
+            self.chainstate.params,
+            HARDFORK_TX_V2,
+            int(height),
+        ) else 1
+        tx = Transaction(version=coinbase_version)
         tx.vin.append(txin)
         tx.vout.append(txout)
         return tx

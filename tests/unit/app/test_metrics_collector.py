@@ -58,6 +58,9 @@ class _Mempool:
     def __init__(self):
         self.transactions = {"a": object(), "b": object()}
         self.total_weight = 777
+        self.min_fee_floor_rate = 2.5
+        self.reject_reason_counts = {"fee_too_low": 3}
+        self.eviction_reason_counts = {"mempool_space": 1}
 
 
 class _Health:
@@ -90,6 +93,9 @@ class TestMetricsCollector(unittest.TestCase):
         self.assertEqual(metrics["chainstate"]["utxo_total_value"], 3456)
         self.assertTrue(metrics["slo"]["ready"])
         self.assertTrue(metrics["slo"]["sync_lag_slo_ok"])
+        self.assertEqual(metrics["node"]["mempool_min_fee_floor_rate"], 2.5)
+        self.assertEqual(metrics["mempool_policy"]["reject_reason_counts"]["fee_too_low"], 3)
+        self.assertEqual(metrics["mempool_policy"]["eviction_reason_counts"]["mempool_space"], 1)
 
     def test_prometheus_export_contains_new_series(self) -> None:
         collector = MetricsCollector(_Node())
@@ -99,6 +105,9 @@ class TestMetricsCollector(unittest.TestCase):
         self.assertIn("berzcoin_chainstate_db_size_bytes", body)
         self.assertIn("berzcoin_utxo_count", body)
         self.assertIn("berzcoin_readiness_slo", body)
+        self.assertIn("berzcoin_mempool_min_fee_floor_rate", body)
+        self.assertIn("berzcoin_mempool_reject_reason_total", body)
+        self.assertIn("berzcoin_mempool_eviction_reason_total", body)
 
 
 if __name__ == "__main__":

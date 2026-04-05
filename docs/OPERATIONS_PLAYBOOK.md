@@ -37,6 +37,30 @@ See alert policy in `ops/prometheus/alerts.yml` and dashboard in
   - Check `get_metrics` memory and mempool size.
   - Lower inbound/outbound caps or restart with reduced load.
 
+## Mempool Pressure Playbook
+1. Diagnose quickly:
+   - `get_mempool_info` for high-level state.
+   - `get_mempool_diagnostics` for:
+     - reject histograms (`reject_reasons`, `reject_reasons_top`)
+     - eviction histograms (`eviction_reasons`, `eviction_reasons_top`)
+     - policy thresholds (`policy_thresholds`)
+     - ranked `eviction_snapshot` candidates.
+2. Determine pressure type:
+   - Spam/low-fee flood: `fee_too_low` rejects rise and `mempool_space` evictions rise.
+   - Conflict storm: `rbf_policy` and `utxo_already_spent_in_mempool` rise.
+   - Reorg fallout: `reorg_*` eviction reasons rise.
+3. Tune without code changes (config + restart):
+   - Raise `mempool_min_relay_fee` to increase ingress floor.
+   - Lower `mempool_max_transactions` / `mempool_max_size_bytes` for tighter memory bound.
+   - Tighten package/dependency limits:
+     - `mempool_max_ancestors`, `mempool_max_descendants`
+     - `mempool_max_package_count`, `mempool_max_package_weight`
+   - Adjust rolling floor decay with `mempool_rolling_floor_halflife_secs`.
+4. Verify stabilization:
+   - Peak mempool size/weight stops climbing.
+   - High-fee tx inclusion resumes.
+   - Reject/eviction histograms trend down from incident peak.
+
 ## Upgrade Procedure
 1. Stop node cleanly via RPC `stop`.
 2. Backup wallet and data directory metadata.
@@ -47,3 +71,4 @@ Detailed procedures:
 - `docs/RUNBOOK_DEPLOY.md`
 - `docs/RUNBOOK_UPGRADE.md`
 - `docs/RUNBOOK_INCIDENTS.md`
+- `docs/RUNBOOK_CONSENSUS_ACTIVATION.md`

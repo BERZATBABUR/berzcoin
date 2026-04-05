@@ -5,6 +5,18 @@ from dataclasses import dataclass, field
 from shared.core.serialization import Serializer
 from shared.core.hashes import hash256
 
+
+def compact_shortid_key(header: bytes, nonce: int) -> bytes:
+    """Derive deterministic compact-block shortid key material."""
+    return hash256(header + Serializer.write_uint64(int(nonce)))
+
+
+def compact_shortid(header: bytes, nonce: int, txid: bytes) -> int:
+    """Compute 48-bit shortid for txid (minimal deterministic scheme)."""
+    key = compact_shortid_key(header, nonce)
+    digest = hash256(key + txid)
+    return int.from_bytes(digest[:6], "little")
+
 @dataclass
 class VersionMessage:
     """Version message (initial handshake)."""
@@ -414,10 +426,69 @@ class CmpctBlockMessage:
 
     @classmethod
     def from_block(cls, block: "Any", nonce: int = 0) -> "CmpctBlockMessage":
-        """Construct a minimal compact block envelope from a full block."""
+        """Construct compact block envelope from a full block."""
+        txs = list(getattr(block, "transactions", []) or [])
+        prefilled: List[Tuple[int, bytes]] = []
+        shortids: List[int] = []
+        if txs:
+            # Always prefill coinbase for minimal reconstructability.
+            prefilled.append((0, txs[0].serialize()))
+        for tx in txs[1:]:
+            shortids.append(compact_shortid(block.header.serialize(), nonce, tx.txid()))
         return cls(
             header=block.header.serialize(),
             nonce=nonce,
-            shortids=[],
-            prefilled_txn=[],
+            shortids=shortids,
+            prefilled_txn=prefilled,
         )
+
+
+@dataclass
+class GetBlockTxnMessage:
+    """Request specific transaction indexes from a compact block."""
+
+    block_hash: bytes = b"\x00" * 32
+    indexes: List[int] = field(default_factory=list)
+
+    def serialize(self) -> bytes:
+        result = self.block_hash
+        result += Serializer.write_varint(len(self.indexes))
+        for index in self.indexes:
+            result += Serializer.write_varint(int(index))
+        return result
+
+    @classmethod
+    def deserialize(cls, data: bytes, offset: int = 0) -> Tuple["GetBlockTxnMessage", int]:
+        block_hash, offset = Serializer.read_bytes(data, offset, 32)
+        count, offset = Serializer.read_varint(data, offset)
+        indexes: List[int] = []
+        for _ in range(count):
+            idx, offset = Serializer.read_varint(data, offset)
+            indexes.append(int(idx))
+        return cls(block_hash=block_hash, indexes=indexes), offset
+
+
+@dataclass
+class BlockTxnMessage:
+    """Response payload containing requested block transactions."""
+
+    block_hash: bytes = b"\x00" * 32
+    transactions: List[bytes] = field(default_factory=list)
+
+    def serialize(self) -> bytes:
+        result = self.block_hash
+        result += Serializer.write_varint(len(self.transactions))
+        for tx in self.transactions:
+            result += Serializer.write_bytes(tx)
+        return result
+
+    @classmethod
+    def deserialize(cls, data: bytes, offset: int = 0) -> Tuple["BlockTxnMessage", int]:
+        block_hash, offset = Serializer.read_bytes(data, offset, 32)
+        count, offset = Serializer.read_varint(data, offset)
+        txs: List[bytes] = []
+        for _ in range(count):
+            tx_len, offset = Serializer.read_varint(data, offset)
+            tx_bytes, offset = Serializer.read_bytes(data, offset, tx_len)
+            txs.append(tx_bytes)
+        return cls(block_hash=block_hash, transactions=txs), offset

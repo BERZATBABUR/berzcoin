@@ -1,0 +1,23 @@
+{
+  "generated_at_utc": "2026-04-05T19:33:13.629240+00:00",
+  "project": "berzcoin",
+  "commit_sha": "5dbe45f188f1571a4db322092d07a8e27e6851a2",
+  "tag": "v2.0.0-rc2",
+  "python_version": "3.13.5",
+  "dependency_lock_file": "requirements-lock.txt",
+  "dependency_lock_sha256": "c6cad534bc96b5a3d92a3e054e2bb8f722f5933c72654462936211b51bdd22a9",
+  "test_suite_versions": {
+    "pytest": "8.3.4",
+    "pytest-asyncio": "1.3.0",
+    "pytest-cov": "7.1.0"
+  },
+  "ci_tool_versions": {
+    "black": "24.10.0",
+    "ruff": "0.8.4",
+    "flake8": "7.1.1",
+    "build": "1.2.2.post1",
+    "wheel": "0.45.1",
+    "bandit": "1.8.0",
+    "pip-audit": "2.7.3"
+  }
+}

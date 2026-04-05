@@ -20,16 +20,80 @@ class MempoolHandlers:
             return {'error': 'Mempool not initialized'}
 
         stats = await self.node.mempool.get_stats()
+        policy = stats.get("policy", {}) if isinstance(stats, dict) else {}
+        min_floor = float(policy.get("min_fee_floor_rate", 0.0))
+
+        thresholds = (
+            self.node.mempool.get_policy_thresholds()
+            if hasattr(self.node.mempool, "get_policy_thresholds")
+            else {}
+        )
+        eviction_snapshot = (
+            self.node.mempool.get_eviction_snapshot(limit=10)
+            if hasattr(self.node.mempool, "get_eviction_snapshot")
+            else {}
+        )
 
         return {
             'loaded': True,
             'size': stats['size'],
             'bytes': stats['total_size'],
             'usage': stats['total_weight'],
-            'maxmempool': 300000000,
-            'mempoolminfee': 0.00001,
-            'minrelaytxfee': 0.00001,
+            'maxmempool': int(getattr(self.node.mempool.limits, "max_size", 300000000)),
+            'mempoolminfee': float(min_floor) / 100000000.0,
+            'minrelaytxfee': float(getattr(self.node.mempool.policy, "min_relay_fee", 0)) / 100000000.0,
+            'reject_reasons': dict(policy.get("reject_reason_counts", {})),
+            'eviction_reasons': dict(policy.get("eviction_reason_counts", {})),
+            'policy_thresholds': thresholds,
+            'eviction_snapshot': eviction_snapshot,
             'unbroadcastcount': 0
+        }
+
+    async def get_mempool_diagnostics(self, top_n: int = 20) -> Dict[str, Any]:
+        """Detailed mempool diagnostics for operator incident response."""
+        if not getattr(self.node, 'mempool', None):
+            return {'error': 'Mempool not initialized'}
+
+        stats = await self.node.mempool.get_stats()
+        policy = stats.get("policy", {}) if isinstance(stats, dict) else {}
+        reject_counts = dict(policy.get("reject_reason_counts", {}))
+        eviction_counts = dict(policy.get("eviction_reason_counts", {}))
+        reject_top = sorted(reject_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
+        eviction_top = sorted(eviction_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
+
+        thresholds = (
+            self.node.mempool.get_policy_thresholds()
+            if hasattr(self.node.mempool, "get_policy_thresholds")
+            else {}
+        )
+        eviction_snapshot = (
+            self.node.mempool.get_eviction_snapshot(limit=max(1, int(top_n)))
+            if hasattr(self.node.mempool, "get_eviction_snapshot")
+            else {}
+        )
+
+        return {
+            "loaded": True,
+            "size": int(stats.get("size", 0)),
+            "totals": {
+                "bytes": int(stats.get("total_size", 0)),
+                "vsize": int(stats.get("total_vsize", 0)),
+                "weight": int(stats.get("total_weight", 0)),
+                "fee": int(stats.get("total_fee", 0)),
+            },
+            "last_reject_reason": getattr(self.node.mempool, "last_reject_reason", None),
+            "reject_reasons": reject_counts,
+            "reject_reasons_top": [
+                {"reason": str(reason), "count": int(count)}
+                for reason, count in reject_top[: max(1, int(top_n))]
+            ],
+            "eviction_reasons": eviction_counts,
+            "eviction_reasons_top": [
+                {"reason": str(reason), "count": int(count)}
+                for reason, count in eviction_top[: max(1, int(top_n))]
+            ],
+            "policy_thresholds": thresholds,
+            "eviction_snapshot": eviction_snapshot,
         }
 
     async def get_raw_mempool(self, verbose: bool = False) -> Any:

@@ -1,6 +1,6 @@
 """Consensus parameters for BerzCoin."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Any
 
 SATOSHI = 1
@@ -58,7 +58,6 @@ class ConsensusParams:
     bip65_height: int  # Block height for BIP65 (OP_CHECKLOCKTIMEVERIFY)
     csv_height: int  # Block height for BIP68/BIP112/BIP113 (OP_CHECKSEQUENCEVERIFY)
     segwit_height: int  # Block height for SegWit activation
-    
     # Genesis block
     genesis_block_hash: str
     genesis_time: int
@@ -73,6 +72,9 @@ class ConsensusParams:
     dns_seeds: list
     checkpoint_data: Dict[int, str]
     max_money: int
+    # Project-specific activation hooks for planned consensus changes.
+    # Key: deployment/rule name, value: activation height.
+    custom_activation_heights: Dict[str, int] = field(default_factory=dict)
 
     def retarget_interval_blocks(self) -> int:
         """Blocks between difficulty adjustments (e.g. 2016 when span 2 weeks / 10 min spacing)."""

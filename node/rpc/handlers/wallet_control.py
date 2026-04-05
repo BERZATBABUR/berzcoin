@@ -2,7 +2,11 @@
 
 from typing import Any, Dict, List
 
-from node.wallet.simple_wallet import SimpleWalletManager
+from node.wallet.simple_wallet import SimpleWalletManager, redact_secret
+from shared.utils.logging import get_logger
+
+
+logger = get_logger()
 
 
 class WalletControlHandlers:
@@ -17,6 +21,10 @@ class WalletControlHandlers:
             manager = SimpleWalletManager(
                 self.node.config.get_datadir(),
                 network=self.node.config.get("network", "mainnet"),
+                wallet_passphrase=self.node.config.get("wallet_encryption_passphrase", ""),
+                default_unlock_timeout_secs=int(
+                    self.node.config.get("wallet_default_unlock_timeout", 300)
+                ),
             )
             setattr(self.node, "simple_wallet_manager", manager)
         return manager
@@ -33,6 +41,7 @@ class WalletControlHandlers:
         try:
             wallet = self._manager().activate_wallet(private_key)
         except Exception:
+            logger.warning("Wallet activation failed for key=%s", redact_secret(private_key))
             return {"error": "Invalid private key"}
         return {"name": "simple", "address": wallet.address, "warning": ""}
 
@@ -59,9 +68,29 @@ class WalletControlHandlers:
         try:
             wallet = self._manager().activate_wallet(key)
         except Exception:
+            logger.warning("Wallet activation failed for key=%s", redact_secret(key))
             return {"error": "Invalid private key"}
         return {
             "status": "activated",
             "address": wallet.address,
             "public_key": wallet.public_key_hex,
         }
+
+    async def wallet_passphrase(self, passphrase: str, timeout: int) -> Dict[str, Any]:
+        """Unlock active wallet for signing for a limited time."""
+        manager = self._manager()
+        if manager.get_active_wallet() is None:
+            return {"error": "No active wallet"}
+        if not manager.wallet_passphrase(passphrase, int(timeout)):
+            return {"error": "Invalid passphrase or wallet unavailable"}
+        return {
+            "status": "unlocked",
+            "timeout": int(timeout),
+            "unlocked_until": int(getattr(manager, "_unlocked_until", 0)),
+        }
+
+    async def wallet_lock(self) -> Dict[str, Any]:
+        """Lock active wallet immediately."""
+        manager = self._manager()
+        manager.lock_wallet()
+        return {"status": "locked"}

@@ -40,6 +40,32 @@ class MiningWalletDashboard:
             )
             setattr(self.node, "simple_wallet_manager", manager)
         return manager
+
+    def _allow_wallet_debug_secrets(self) -> bool:
+        cfg = self.node.config
+        if not bool(cfg.get("wallet_debug_secrets", False)):
+            return False
+        network = str(cfg.get("network", "mainnet") or "mainnet").strip().lower()
+        is_dev_mode = bool(cfg.get("debug", False))
+        return network == "regtest" or is_dev_mode
+
+    def _wallet_public_payload(self, wallet, include_debug_secrets: bool = False) -> dict:
+        balance_sats = int(self.node.chainstate.get_balance(wallet.address))
+        manager = self._wallet_manager()
+        payload = {
+            "public_key": wallet.public_key_hex,
+            "address": wallet.address,
+            "balance": balance_sats / 100000000,
+            "watch_only": bool(getattr(wallet, "watch_only", False)),
+            "unlocked": bool(manager.is_wallet_unlocked()),
+            "unlocked_until": int(getattr(manager, "_unlocked_until", 0)),
+            "debug_secrets_allowed": False,
+        }
+        if include_debug_secrets and self._allow_wallet_debug_secrets():
+            payload["private_key"] = wallet.private_key_hex
+            payload["mnemonic"] = wallet.mnemonic
+            payload["debug_secrets_allowed"] = True
+        return payload
     
     async def start(self):
         """Start dashboard."""
@@ -57,6 +83,8 @@ class MiningWalletDashboard:
         self.app.router.add_post('/api/wallet/activate', self.activate_wallet)
         self.app.router.add_get('/api/wallet/info', self.wallet_info)
         self.app.router.add_post('/api/wallet/create', self.create_wallet)
+        self.app.router.add_post('/api/wallet/unlock', self.wallet_unlock)
+        self.app.router.add_post('/api/wallet/lock', self.wallet_lock)
         self.app.router.add_post('/api/wallet/send', self.send_transaction)
         self.app.router.add_get('/api/wallet/balance', self.get_balance)
         
@@ -120,15 +148,11 @@ class MiningWalletDashboard:
         wallet = self._wallet_manager().create_wallet()
         self._wallet_manager().active_wallet = wallet
         self._wallet_manager().active_private_key = wallet.private_key_hex
-        balance = self.node.chainstate.get_balance(wallet.address) / 100000000
-        return json_response({
-            'private_key': wallet.private_key_hex,
-            'public_key': wallet.public_key_hex,
-            'address': wallet.address,
-            'mnemonic': wallet.mnemonic,
-            'balance': balance,
-            'warning': 'Store your private key safely. Recovery depends on it.',
-        })
+        payload = self._wallet_public_payload(wallet, include_debug_secrets=True)
+        payload["warning"] = (
+            "Wallet created. Secrets are hidden by default; use secure backup/export flow."
+        )
+        return json_response(payload)
     
     async def activate_wallet(self, request):
         """Activate wallet with private key."""
@@ -142,30 +166,42 @@ class MiningWalletDashboard:
             return json_response({'error': 'Invalid private key'}, status=400)
         if wallet is None:
             return json_response({'error': 'Invalid private key'}, status=400)
-        balance = self.node.chainstate.get_balance(wallet.address) / 100000000
-        return json_response({
-            'private_key': wallet.private_key_hex,
-            'public_key': wallet.public_key_hex,
-            'address': wallet.address,
-            'mnemonic': wallet.mnemonic,
-            'balance': balance,
-        })
+        payload = self._wallet_public_payload(wallet, include_debug_secrets=True)
+        payload["status"] = "activated"
+        return json_response(payload)
     
     async def wallet_info(self, request):
         """Get current wallet info."""
         wallet = self._wallet_manager().get_active_wallet()
         if not wallet:
             return json_response({'active': False})
-        balance = self.node.chainstate.get_balance(wallet.address)
+        payload = self._wallet_public_payload(wallet, include_debug_secrets=True)
+        payload["active"] = True
+        return json_response(payload)
 
-        return json_response({
-            'active': True,
-            'private_key': wallet.private_key_hex,
-            'public_key': wallet.public_key_hex,
-            'address': wallet.address,
-            'mnemonic': wallet.mnemonic,
-            'balance': balance / 100000000
-        })
+    async def wallet_unlock(self, request):
+        """Unlock active wallet for signing for timeout seconds."""
+        data = await request.json()
+        passphrase = str(data.get("passphrase", "") or "")
+        timeout = int(data.get("timeout", 300) or 300)
+        manager = self._wallet_manager()
+        if manager.get_active_wallet() is None:
+            return json_response({"error": "No active wallet"}, status=400)
+        if not manager.wallet_passphrase(passphrase, timeout):
+            return json_response({"error": "Invalid passphrase or timeout"}, status=400)
+        return json_response(
+            {
+                "status": "unlocked",
+                "timeout": int(timeout),
+                "unlocked_until": int(getattr(manager, "_unlocked_until", 0)),
+            }
+        )
+
+    async def wallet_lock(self, request):
+        """Lock active wallet immediately."""
+        manager = self._wallet_manager()
+        manager.lock_wallet()
+        return json_response({"status": "locked"})
     
     async def get_balance(self, request):
         """Get wallet balance."""
@@ -249,8 +285,18 @@ class MiningWalletDashboard:
         outputs = [(to_address, satoshis)]
         tx = builder.create_transaction(inputs, outputs, from_address, fee=target_fee)
 
+        signing_key_hex = manager.get_active_private_key()
+        if private_key:
+            signing_key_hex = private_key
+        if not signing_key_hex:
+            return json_response(
+                {
+                    "error": "Wallet is locked. Use wallet unlock first or provide private key for activation."
+                },
+                status=400,
+            )
         try:
-            private_key_obj = PrivateKey(int(wallet.private_key_hex, 16))
+            private_key_obj = PrivateKey(int(signing_key_hex, 16))
         except ValueError:
             return json_response({'error': 'Invalid active private key'}, status=400)
 
@@ -780,6 +826,15 @@ class MiningWalletDashboard:
                     <button onclick="createWallet()">Create New Wallet</button>
                     <div id="newWalletResult"></div>
                 </div>
+
+                <div class="card">
+                    <h3>🔒 Wallet Lock/Unlock</h3>
+                    <input type="password" id="walletPassphrase" placeholder="Wallet passphrase">
+                    <input type="number" id="walletUnlockTimeout" placeholder="Unlock timeout seconds" value="300">
+                    <button onclick="unlockWallet()">Unlock</button>
+                    <button onclick="lockWallet()">Lock</button>
+                    <div id="lockResult"></div>
+                </div>
                 
                 <div class="card">
                     <h3>📋 Current Wallet</h3>
@@ -790,7 +845,6 @@ class MiningWalletDashboard:
                     <h3>💸 Send BerzCoin</h3>
                     <input type="text" id="sendTo" placeholder="Recipient Address">
                     <input type="number" id="sendAmount" placeholder="Amount (BERZ)">
-                    <input type="text" id="sendPrivateKey" placeholder="Your Private Key (or use active wallet)">
                     <button onclick="sendTransaction()">Send</button>
                     <div id="sendResult"></div>
                 </div>
@@ -825,13 +879,17 @@ class MiningWalletDashboard:
                 async function createWallet() {
                     const response = await fetch('/api/wallet/create', {method: 'POST'});
                     const data = await response.json();
+                    const extra = data.debug_secrets_allowed ? `
+                        <br><span class="warning">Debug secrets enabled (dev-only):</span><br>
+                        <strong>Private Key:</strong> ${data.private_key}<br>
+                        <strong>Mnemonic:</strong> ${data.mnemonic}
+                    ` : '';
                     document.getElementById('newWalletResult').innerHTML = `
                         <span class="success">✅ Wallet created!</span><br>
-                        <span class="warning">⚠️ SAVE THESE CREDENTIALS! You are responsible!</span><br>
-                        <strong>Private Key:</strong> ${data.private_key}<br>
                         <strong>Public Key:</strong> ${data.public_key.substring(0, 64)}...<br>
                         <strong>Address:</strong> ${data.address}<br>
-                        <strong>Mnemonic:</strong> ${data.mnemonic}
+                        <strong>Balance:</strong> ${data.balance} BERZ
+                        ${extra}
                     `;
                 }
                 
@@ -839,21 +897,55 @@ class MiningWalletDashboard:
                     const response = await fetch('/api/wallet/info');
                     const data = await response.json();
                     if (data.active) {
+                        const secretLine = data.debug_secrets_allowed ? `<strong>Mnemonic:</strong> ${data.mnemonic || 'Not available'}<br>` : '';
                         document.getElementById('walletInfo').innerHTML = `
                             <strong>Address:</strong> ${data.address}<br>
                             <strong>Public Key:</strong> ${data.public_key.substring(0, 64)}...<br>
                             <strong>Balance:</strong> ${data.balance} BERZ<br>
-                            <strong>Mnemonic:</strong> ${data.mnemonic || 'Not available'}
+                            <strong>Watch-only:</strong> ${data.watch_only ? 'Yes' : 'No'}<br>
+                            <strong>Unlocked:</strong> ${data.unlocked ? 'Yes' : 'No'}<br>
+                            ${secretLine}
                         `;
                     } else {
                         document.getElementById('walletInfo').innerHTML = 'No wallet active';
+                    }
+                }
+
+                async function unlockWallet() {
+                    const passphrase = document.getElementById('walletPassphrase').value;
+                    const timeout = parseInt(document.getElementById('walletUnlockTimeout').value || '300', 10);
+                    const response = await fetch('/api/wallet/unlock', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({passphrase, timeout})
+                    });
+                    const data = await response.json();
+                    if (data.status === 'unlocked') {
+                        document.getElementById('lockResult').innerHTML = `<span class="success">✅ Unlocked for ${data.timeout}s</span>`;
+                        loadWalletInfo();
+                    } else {
+                        document.getElementById('lockResult').innerHTML = `<span class="error">❌ ${data.error || 'Unlock failed'}</span>`;
+                    }
+                }
+
+                async function lockWallet() {
+                    const response = await fetch('/api/wallet/lock', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({})
+                    });
+                    const data = await response.json();
+                    if (data.status === 'locked') {
+                        document.getElementById('lockResult').innerHTML = `<span class="success">✅ Wallet locked</span>`;
+                        loadWalletInfo();
+                    } else {
+                        document.getElementById('lockResult').innerHTML = `<span class="error">❌ ${data.error || 'Lock failed'}</span>`;
                     }
                 }
                 
                 async function sendTransaction() {
                     const to = document.getElementById('sendTo').value;
                     const amount = parseFloat(document.getElementById('sendAmount').value);
-                    const privateKey = document.getElementById('sendPrivateKey').value;
                     
                     if (!to || !amount) {
                         document.getElementById('sendResult').innerHTML = '<span class="warning">Enter recipient and amount</span>';
@@ -863,7 +955,7 @@ class MiningWalletDashboard:
                     const response = await fetch('/api/wallet/send', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({to, amount, private_key: privateKey || undefined})
+                        body: JSON.stringify({to, amount})
                     });
                     const data = await response.json();
                     if (data.txid) {

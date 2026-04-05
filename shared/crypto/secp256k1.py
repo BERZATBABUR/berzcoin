@@ -1,10 +1,23 @@
 """secp256k1 elliptic curve implementation."""
 
+import os
 import hashlib
 import hmac
 from typing import Tuple, Optional
 
 from ..core.hashes import tagged_hash
+
+try:
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+    from cryptography.hazmat.primitives.asymmetric.utils import (
+        decode_dss_signature,
+        encode_dss_signature,
+        Prehashed,
+    )
+    _HAS_CRYPTOGRAPHY = True
+except Exception:
+    _HAS_CRYPTOGRAPHY = False
 
 # secp256k1 curve parameters
 P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
@@ -118,6 +131,50 @@ def private_to_public(private_key: int) -> Tuple[int, int]:
     point = GENERATOR.multiply(private_key)
     return (point.x, point.y)
 
+
+def _use_audited_backend() -> bool:
+    """Return True when audited OpenSSL backend should be used for ECDSA."""
+    if not _HAS_CRYPTOGRAPHY:
+        return False
+    mode = str(os.getenv("BERZCOIN_ECDSA_BACKEND", "audited") or "audited").strip().lower()
+    return mode not in {"pure", "python"}
+
+
+def _validate_sign_inputs(private_key: int, message_hash: bytes) -> None:
+    if private_key <= 0 or private_key >= N:
+        raise ValueError("invalid private key range")
+    if len(message_hash) != 32:
+        raise ValueError("message_hash must be 32 bytes")
+
+
+def _sign_message_pure(private_key: int, message_hash: bytes) -> Tuple[int, int]:
+    """Pure-python ECDSA fallback (legacy implementation)."""
+    _validate_sign_inputs(private_key, message_hash)
+    import secrets
+    k = secrets.randbelow(N - 1) + 1
+    point = GENERATOR.multiply(k)
+    r = point.x % N
+    if r == 0:
+        return _sign_message_pure(private_key, message_hash)
+    msg_int = int.from_bytes(message_hash, 'big')
+    s = (pow(k, N-2, N) * (msg_int + private_key * r)) % N
+    if s == 0:
+        return _sign_message_pure(private_key, message_hash)
+    if s > N // 2:
+        s = N - s
+    return (r, s)
+
+
+def _sign_message_audited(private_key: int, message_hash: bytes) -> Tuple[int, int]:
+    _validate_sign_inputs(private_key, message_hash)
+    priv = ec.derive_private_key(int(private_key), ec.SECP256K1())
+    der = priv.sign(message_hash, ec.ECDSA(Prehashed(hashes.SHA256())))
+    r, s = decode_dss_signature(der)
+    # Canonical low-S for stable tx signatures and malleability reduction.
+    if s > N // 2:
+        s = N - s
+    return (r, s)
+
 def sign_message(private_key: int, message_hash: bytes) -> Tuple[int, int]:
     """Sign a message hash with private key.
 
@@ -128,26 +185,48 @@ def sign_message(private_key: int, message_hash: bytes) -> Tuple[int, int]:
     Returns:
         Tuple of (r, s) signature components
     """
-    # Simplified deterministic k generation (RFC 6979 style)
-    # In production, use proper RFC 6979 implementation
-    import secrets
-    k = secrets.randbelow(N)
+    if _use_audited_backend():
+        return _sign_message_audited(private_key, message_hash)
+    return _sign_message_pure(private_key, message_hash)
 
-    # Calculate r
-    point = GENERATOR.multiply(k)
-    r = point.x % N
-    if r == 0:
-        return sign_message(private_key, message_hash)
 
-    # Calculate s
+def _verify_signature_pure(
+    public_key: Tuple[int, int], message_hash: bytes, signature: Tuple[int, int]
+) -> bool:
+    """Pure-python ECDSA verify fallback (legacy implementation)."""
+    if len(message_hash) != 32:
+        return False
+    r, s = signature
+    if r <= 0 or r >= N or s <= 0 or s >= N:
+        return False
+    w = pow(s, N-2, N)
     msg_int = int.from_bytes(message_hash, 'big')
-    s = (pow(k, N-2, N) * (msg_int + private_key * r)) % N
-    if s == 0:
-        return sign_message(private_key, message_hash)
-    if s > N // 2:
-        s = N - s
+    u1 = (msg_int * w) % N
+    u2 = (r * w) % N
+    point = GENERATOR.multiply(u1)
+    point = point + Point(public_key[0], public_key[1]).multiply(u2)
+    if point.inf:
+        return False
+    return point.x % N == r
 
-    return (r, s)
+
+def _verify_signature_audited(
+    public_key: Tuple[int, int], message_hash: bytes, signature: Tuple[int, int]
+) -> bool:
+    if len(message_hash) != 32:
+        return False
+    r, s = signature
+    if r <= 0 or r >= N or s <= 0 or s >= N:
+        return False
+    try:
+        pub = ec.EllipticCurvePublicNumbers(
+            int(public_key[0]), int(public_key[1]), ec.SECP256K1()
+        ).public_key()
+        der = encode_dss_signature(int(r), int(s))
+        pub.verify(der, message_hash, ec.ECDSA(Prehashed(hashes.SHA256())))
+        return True
+    except Exception:
+        return False
 
 def verify_signature(public_key: Tuple[int, int], message_hash: bytes, signature: Tuple[int, int]) -> bool:
     """Verify a signature.
@@ -160,29 +239,9 @@ def verify_signature(public_key: Tuple[int, int], message_hash: bytes, signature
     Returns:
         True if signature is valid
     """
-    r, s = signature
-
-    if r <= 0 or r >= N or s <= 0 or s >= N:
-        return False
-
-    # Compute w = s^-1 mod N
-    w = pow(s, N-2, N)
-
-    # Compute u1 = (msg * w) mod N
-    msg_int = int.from_bytes(message_hash, 'big')
-    u1 = (msg_int * w) % N
-
-    # Compute u2 = (r * w) mod N
-    u2 = (r * w) % N
-
-    # Compute point = u1*G + u2*P
-    point = GENERATOR.multiply(u1)
-    point = point + Point(public_key[0], public_key[1]).multiply(u2)
-
-    if point.inf:
-        return False
-
-    return point.x % N == r
+    if _use_audited_backend():
+        return _verify_signature_audited(public_key, message_hash, signature)
+    return _verify_signature_pure(public_key, message_hash, signature)
 
 
 def schnorr_sign_message(private_key: int, message_hash: bytes, aux_rand: bytes = b"\x00" * 32) -> bytes:

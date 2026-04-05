@@ -4,6 +4,7 @@ import asyncio
 import unittest
 
 from node.mempool.pool import Mempool
+from node.mempool.policy import MempoolPolicy
 from shared.core.hashes import hash160
 from shared.core.transaction import Transaction, TxIn, TxOut
 from shared.crypto.keys import PrivateKey
@@ -66,6 +67,70 @@ class TestMempoolPackage(unittest.TestCase):
             self.assertTrue(result.get("accepted"))
             self.assertIn(parent.txid().hex(), mempool.transactions)
             self.assertIn(child.txid().hex(), mempool.transactions)
+
+        asyncio.run(run())
+
+    def test_cpfp_package_admission_accepts_low_fee_parent_when_package_clears_floor(self) -> None:
+        async def run() -> None:
+            funding_key = PrivateKey()
+            child_key = PrivateKey()
+            recipient_key = PrivateKey()
+
+            funding_spk = _p2pkh_script(hash160(funding_key.public_key().to_bytes()))
+            child_spk = _p2pkh_script(hash160(child_key.public_key().to_bytes()))
+            recipient_spk = _p2pkh_script(hash160(recipient_key.public_key().to_bytes()))
+
+            prev_txid = "cc" * 32
+            chainstate = _ChainStateStub({(prev_txid, 0): {"value": 220_000, "script_pubkey": funding_spk}}, {prev_txid})
+            policy = MempoolPolicy()
+            policy.set_min_relay_fee(50)  # sat/vB
+            mempool = Mempool(chainstate, policy=policy)
+
+            parent = Transaction(version=2)
+            parent.vin = [TxIn(prev_tx_hash=bytes.fromhex(prev_txid), prev_tx_index=0, sequence=0xFFFFFFFD)]
+            parent.vout = [TxOut(219_000, child_spk)]  # low individual fee (1k)
+            _build_signed_input(parent, 0, funding_key, funding_spk)
+
+            child = Transaction(version=2)
+            child.vin = [TxIn(prev_tx_hash=parent.txid(), prev_tx_index=0, sequence=0xFFFFFFFD)]
+            child.vout = [TxOut(175_000, recipient_spk)]  # high child fee (44k)
+            _build_signed_input(child, 0, child_key, child_spk)
+
+            result = await mempool.add_package([child, parent])
+            self.assertTrue(result.get("accepted"))
+            self.assertIn(parent.txid().hex(), mempool.transactions)
+            self.assertIn(child.txid().hex(), mempool.transactions)
+
+        asyncio.run(run())
+
+    def test_package_rejects_when_aggregate_fee_below_floor(self) -> None:
+        async def run() -> None:
+            funding_key = PrivateKey()
+            child_key = PrivateKey()
+
+            funding_spk = _p2pkh_script(hash160(funding_key.public_key().to_bytes()))
+            child_spk = _p2pkh_script(hash160(child_key.public_key().to_bytes()))
+
+            prev_txid = "dd" * 32
+            chainstate = _ChainStateStub({(prev_txid, 0): {"value": 220_000, "script_pubkey": funding_spk}}, {prev_txid})
+            policy = MempoolPolicy()
+            policy.set_min_relay_fee(200)  # deliberately high floor
+            mempool = Mempool(chainstate, policy=policy)
+
+            parent = Transaction(version=2)
+            parent.vin = [TxIn(prev_tx_hash=bytes.fromhex(prev_txid), prev_tx_index=0, sequence=0xFFFFFFFD)]
+            parent.vout = [TxOut(219_500, child_spk)]  # fee 500
+            _build_signed_input(parent, 0, funding_key, funding_spk)
+
+            child = Transaction(version=2)
+            child.vin = [TxIn(prev_tx_hash=parent.txid(), prev_tx_index=0, sequence=0xFFFFFFFD)]
+            child.vout = [TxOut(219_000, child_spk)]  # fee 500
+            _build_signed_input(child, 0, child_key, child_spk)
+
+            result = await mempool.add_package([parent, child])
+            self.assertFalse(result.get("accepted"))
+            self.assertEqual(result.get("reject-reason"), "package_fee_too_low")
+            self.assertEqual(len(mempool.transactions), 0)
 
         asyncio.run(run())
 

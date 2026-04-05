@@ -9,8 +9,10 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from shared.consensus.buried_deployments import normalize_custom_deployment_name
 from shared.consensus.params import ConsensusParams
 from shared.utils.logging import get_logger
+from node.p2p.dns_seeds import DNSSeeds
 
 logger = get_logger()
 
@@ -37,9 +39,31 @@ class Config:
         "addressindex": False,
         "maxmempool": 300,
         "mempoolminfee": 1000,
+        # Explicit mempool policy/limit knobs (operator-facing).
+        # `mempoolminfee` remains supported for compatibility (sat/kvB style).
+        "mempool_min_relay_fee": 1,
+        "mempool_rolling_floor_halflife_secs": 600,
+        "mempool_max_size_bytes": 300_000_000,
+        "mempool_max_weight": 1_500_000_000,
+        "mempool_max_transactions": 50_000,
+        "mempool_max_ancestors": 25,
+        "mempool_max_descendants": 25,
+        "mempool_max_ancestor_size_vbytes": 101_000,
+        "mempool_max_descendant_size_vbytes": 101_000,
+        "mempool_max_package_count": 25,
+        "mempool_max_package_weight": 404_000,
+        "persistmempool": True,
         "wallet": "default",
         "disablewallet": False,
         "wallet_private_key": "",
+        # Wallet security default: never expose private key/seed in generic RPC
+        # responses unless explicitly enabled for local development.
+        "wallet_debug_secrets": False,
+        # Passphrase used for encrypted wallet-at-rest storage (scrypt + AES-GCM).
+        # Prefer setting via config/env in production deployments.
+        "wallet_encryption_passphrase": "",
+        # Default unlock duration after create/activate (seconds).
+        "wallet_default_unlock_timeout": 300,
         "mining": False,
         "miningaddress": "",
         "autominer": False,
@@ -71,7 +95,7 @@ class Config:
         "lightwallet": False,
         "filterport": 8334,
         "checkpoints": True,
-        "dnsseed": False,
+        "dnsseed": True,
         "dnsseeds": [],
         "addnode": [],
         "connect": [],
@@ -85,9 +109,20 @@ class Config:
         "web_require_auth": False,
         "rpc_require_auth": True,
         "disable_ip_discovery": False,
+        # Staged rollout switch for deeper network hardening.
+        # Phase 0 default stays False to preserve current behavior.
+        "network_hardening": False,
         # Operator safety: refuse to start a public-facing node when no
         # bootstrap peers are configured unless this flag is set to true.
         "allow_missing_bootstrap": False,
+        # Local node's supported consensus release level.
+        "node_consensus_version": 2,
+        # Refuse startup when chain is at/after configured hard-fork activation and
+        # local consensus version is too old.
+        "enforce_hardfork_guardrails": True,
+        # Project-specific consensus activation heights.
+        # Example: {"berz_softfork_bip34_strict": 150, "berz_hardfork_tx_v2": 300}
+        "custom_activation_heights": {},
     }
 
     def __init__(self, config_path: Optional[str] = None):
@@ -104,6 +139,18 @@ class Config:
                 for key, value in parser.items(section):
                     if key == "listen":
                         self.config["bind"] = self._parse_value(value, self.config["bind"])
+                        continue
+                    if key.startswith("activation_height_"):
+                        deployment = normalize_custom_deployment_name(
+                            key[len("activation_height_"):].strip().lower()
+                        )
+                        if not deployment:
+                            continue
+                        existing = self.parse_activation_height_items(
+                            self.config.get("custom_activation_heights", {})
+                        )
+                        existing[deployment] = self._parse_activation_height_value(value)
+                        self.config["custom_activation_heights"] = existing
                         continue
                     if key in self.config:
                         self.config[key] = self._parse_value(value, self.config[key])
@@ -122,7 +169,59 @@ class Config:
             return float(value)
         if isinstance(default, list):
             return [v.strip() for v in value.split(",") if v.strip()]
+        if isinstance(default, dict):
+            return self.parse_activation_height_items(value)
         return value
+
+    @staticmethod
+    def _parse_activation_height_value(raw: Any) -> int:
+        parsed = int(str(raw).strip())
+        return max(0, parsed)
+
+    @staticmethod
+    def parse_activation_height_items(raw: Any) -> Dict[str, int]:
+        """Parse activation heights from dict, JSON, or NAME:HEIGHT/NAME=HEIGHT list."""
+        if raw is None:
+            return {}
+
+        if isinstance(raw, dict):
+            out: Dict[str, int] = {}
+            for k, v in raw.items():
+                name = str(k).strip().lower()
+                name = normalize_custom_deployment_name(name)
+                if not name:
+                    continue
+                out[name] = Config._parse_activation_height_value(v)
+            return out
+
+        if isinstance(raw, list):
+            out: Dict[str, int] = {}
+            for item in raw:
+                text = str(item).strip()
+                if not text:
+                    continue
+                sep = "=" if "=" in text else ":"
+                if sep not in text:
+                    raise ValueError(f"Invalid activation override '{text}'; expected NAME=HEIGHT")
+                name, height = text.split(sep, 1)
+                normalized = normalize_custom_deployment_name(name.strip().lower())
+                if not normalized:
+                    raise ValueError(f"Invalid activation override '{text}'; missing NAME")
+                out[normalized] = Config._parse_activation_height_value(height)
+            return out
+
+        text = str(raw).strip()
+        if not text:
+            return {}
+        # Accept JSON object or comma-separated NAME:HEIGHT / NAME=HEIGHT pairs.
+        if text.startswith("{"):
+            obj = json.loads(text)
+            if not isinstance(obj, dict):
+                raise ValueError("custom_activation_heights JSON must be an object")
+            return Config.parse_activation_height_items(obj)
+
+        parts = [p.strip() for p in text.split(",") if p.strip()]
+        return Config.parse_activation_height_items(parts)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.config.get(key, default)
@@ -213,6 +312,37 @@ class Config:
             return []
         return [str(x).strip() for x in nodes if str(x).strip()]
 
+    def get_dns_seed_hosts(self) -> List[str]:
+        """Configured DNS seeds, or network-profile defaults when enabled."""
+        if not bool(self.config.get("dnsseed", True)):
+            return []
+        configured = self._peer_list("dnsseeds")
+        if configured:
+            return configured
+        network = str(self.config.get("network", "mainnet") or "mainnet")
+        return DNSSeeds.default_seeds_for_network(network)
+
+    def get_peer_discovery_sources(self) -> Dict[str, List[str]]:
+        """Return discovery sources in priority order."""
+        connect = self.get_connect_peers()
+        if connect:
+            return {
+                "connect": connect,
+                "addnode": [],
+                "bootstrap_file": [],
+                "dns_seeds": [],
+            }
+        return {
+            "connect": [],
+            "addnode": self.get_addnode_peers(),
+            "bootstrap_file": self.get_bootstrap_nodes(),
+            "dns_seeds": self.get_dns_seed_hosts(),
+        }
+
+    def has_viable_peer_discovery_source(self) -> bool:
+        sources = self.get_peer_discovery_sources()
+        return any(bool(items) for items in sources.values())
+
     def get_network_params(self) -> ConsensusParams:
         network = self.config["network"]
         if network == "mainnet":
@@ -224,6 +354,10 @@ class Config:
 
         maturity = int(self.config.get("coinbase_maturity", getattr(params, "coinbase_maturity", 100)) or 0)
         setattr(params, "coinbase_maturity", max(0, maturity))
+        custom = self.parse_activation_height_items(
+            self.config.get("custom_activation_heights", {})
+        )
+        setattr(params, "custom_activation_heights", custom)
         return params
 
     def validate(self) -> bool:
@@ -248,6 +382,17 @@ class Config:
         if not 1024 <= rpcport <= 65535:
             logger.error("Invalid rpcport: %s", rpcport)
             return False
+
+        network = str(self.config.get("network", "mainnet") or "mainnet").lower()
+        allow_missing = bool(self.config.get("allow_missing_bootstrap", False))
+        if network != "regtest" and not allow_missing:
+            if not self.has_viable_peer_discovery_source():
+                logger.error(
+                    "No viable peer discovery source configured for %s. "
+                    "Set one of connect/addnode/bootstrap_file/dnsseed or allow_missing_bootstrap=true.",
+                    network,
+                )
+                return False
 
         return True
 

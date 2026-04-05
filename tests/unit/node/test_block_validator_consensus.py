@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from node.chain.validation import BlockValidator
+from shared.consensus.buried_deployments import HARDFORK_TX_V2, SOFTFORK_BIP34_STRICT
 from shared.consensus.params import ConsensusParams
 from shared.core.block import Block, BlockHeader
 from shared.core.merkle import merkle_root
@@ -211,6 +212,32 @@ class TestBlockValidatorConsensus(unittest.TestCase):
             # Force mismatch if compact conversion happens to round equal.
             candidate.bits = old_bits - 1
         self.assertFalse(validator.validate_header(candidate, height=10))
+
+    def test_hardfork_v2_tx_version_gate_in_block_validator(self):
+        params = ConsensusParams.regtest()
+        params.custom_activation_heights = {HARDFORK_TX_V2: 50}
+        utxo_store = _UTXOStore({("aa" * 32, 0): {"value": 5_000, "script_pubkey": b"\x51", "height": 1, "is_coinbase": False}})
+        validator = BlockValidator(params, utxo_store, _BlockIndex("11" * 32))
+
+        tx = _spend("aa" * 32, 0)
+        tx.version = 1
+        with patch("node.chain.validation.verify_input_script", return_value=True):
+            self.assertTrue(validator.validate_transaction(tx, height=49, is_coinbase=False))
+            self.assertFalse(validator.validate_transaction(tx, height=50, is_coinbase=False))
+
+    def test_softfork_strict_bip34_gate_in_block_validator(self):
+        legacy_params = ConsensusParams.regtest()
+        legacy_params.bip34_height = 1
+        legacy_validator = BlockValidator(legacy_params, _UTXOStore({}), _BlockIndex("11" * 32))
+        legacy_cb = _coinbase(tag=b"\x02\x99\x14")
+        self.assertTrue(legacy_validator.validate_coinbase(legacy_cb, height=20))
+
+        strict_params = ConsensusParams.regtest()
+        strict_params.bip34_height = 1
+        strict_params.custom_activation_heights = {SOFTFORK_BIP34_STRICT: 0}
+        strict_validator = BlockValidator(strict_params, _UTXOStore({}), _BlockIndex("11" * 32))
+        strict_cb = _coinbase(tag=b"\x02\x99\x14")
+        self.assertFalse(strict_validator.validate_coinbase(strict_cb, height=20))
 
 
 if __name__ == "__main__":

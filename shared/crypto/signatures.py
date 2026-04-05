@@ -1,9 +1,67 @@
 """Signature creation and verification."""
 
-import hashlib
 from typing import Tuple
 from .keys import PrivateKey, PublicKey
 from .secp256k1 import schnorr_sign_message, schnorr_verify_message
+
+
+CURVE_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+
+
+def _parse_der_signature_strict(signature: bytes) -> Tuple[int, int]:
+    """Strict DER parser for ECDSA signatures (no trailing bytes, canonical integers)."""
+    if not isinstance(signature, (bytes, bytearray)):
+        raise ValueError("Signature must be bytes")
+    sig = bytes(signature)
+    # Bitcoin DER signatures are typically 8..72 bytes.
+    if len(sig) < 8 or len(sig) > 72:
+        raise ValueError("Invalid DER length")
+    if sig[0] != 0x30:
+        raise ValueError("Invalid DER sequence tag")
+    total_len = sig[1]
+    if total_len != len(sig) - 2:
+        raise ValueError("Invalid DER sequence length")
+
+    pos = 2
+    if pos >= len(sig) or sig[pos] != 0x02:
+        raise ValueError("Missing DER integer r tag")
+    pos += 1
+    if pos >= len(sig):
+        raise ValueError("Missing DER r length")
+    r_len = sig[pos]
+    pos += 1
+    if r_len == 0 or pos + r_len > len(sig):
+        raise ValueError("Invalid DER r length")
+    r_bytes = sig[pos:pos + r_len]
+    pos += r_len
+
+    if pos >= len(sig) or sig[pos] != 0x02:
+        raise ValueError("Missing DER integer s tag")
+    pos += 1
+    if pos >= len(sig):
+        raise ValueError("Missing DER s length")
+    s_len = sig[pos]
+    pos += 1
+    if s_len == 0 or pos + s_len != len(sig):
+        raise ValueError("Invalid DER s length")
+    s_bytes = sig[pos:pos + s_len]
+
+    # Canonical integer rules: positive, minimally-encoded.
+    if r_bytes[0] & 0x80:
+        raise ValueError("DER r must be positive")
+    if s_bytes[0] & 0x80:
+        raise ValueError("DER s must be positive")
+    if len(r_bytes) > 1 and r_bytes[0] == 0x00 and not (r_bytes[1] & 0x80):
+        raise ValueError("DER r has non-minimal encoding")
+    if len(s_bytes) > 1 and s_bytes[0] == 0x00 and not (s_bytes[1] & 0x80):
+        raise ValueError("DER s has non-minimal encoding")
+
+    r = int.from_bytes(r_bytes, "big")
+    s = int.from_bytes(s_bytes, "big")
+    if r <= 0 or r >= CURVE_ORDER or s <= 0 or s >= CURVE_ORDER:
+        raise ValueError("DER signature scalar out of range")
+    return r, s
+
 
 def sign_message_hash(private_key: PrivateKey, message_hash: bytes) -> bytes:
     """Sign a message hash and return DER encoded signature.
@@ -58,36 +116,10 @@ def verify_signature(public_key: PublicKey, message_hash: bytes, signature: byte
     Returns:
         True if signature is valid
     """
-    # Parse DER signature
-    if signature[0] != 0x30:
+    try:
+        r, s = _parse_der_signature_strict(signature)
+    except Exception:
         return False
-
-    # Skip length
-    pos = 2
-
-    # Parse r
-    if signature[pos] != 0x02:
-        return False
-    pos += 1
-
-    r_len = signature[pos]
-    pos += 1
-    r_bytes = signature[pos:pos + r_len]
-    pos += r_len
-
-    # Parse s
-    if signature[pos] != 0x02:
-        return False
-    pos += 1
-
-    s_len = signature[pos]
-    pos += 1
-    s_bytes = signature[pos:pos + s_len]
-
-    # Convert to integers
-    r = int.from_bytes(r_bytes, 'big')
-    s = int.from_bytes(s_bytes, 'big')
-
     return public_key.verify(message_hash, (r, s))
 
 

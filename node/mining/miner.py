@@ -6,6 +6,7 @@ from typing import Optional, List, Dict, Any, Callable, Awaitable
 
 from shared.core.block import Block, BlockHeader
 from shared.core.transaction import Transaction
+from shared.consensus.buried_deployments import HARDFORK_TX_V2, is_consensus_feature_active
 from shared.core.merkle import merkle_root
 from shared.consensus.pow import ProofOfWork
 from shared.consensus.subsidy import get_block_subsidy
@@ -135,7 +136,7 @@ class MiningNode:
                     # Header timestamp must be > MTP.
                     timestamp = max(int(time.time()), self._get_median_time() + 1)
                     header = BlockHeader(
-                        version=1,
+                        version=self._next_block_version(),
                         prev_block_hash=bytes.fromhex(best_hash),
                         merkle_root=merkle_root_hash,
                         timestamp=timestamp,
@@ -276,8 +277,18 @@ class MiningNode:
         """Select transactions from mempool (highest fee first)."""
         if not self.mempool:
             return []
+        reserved_weight = 4000
+        max_weight = int(getattr(self.chainstate.params, "max_block_weight", 4_000_000))
+        available_weight = max(0, max_weight - reserved_weight)
+        get_for_block = getattr(self.mempool, "get_transactions_for_block", None)
+        if callable(get_for_block):
+            return await get_for_block(max_weight=available_weight)
 
-        all_txs = await self.mempool.get_transactions()
+        # Backward-compat fallback for test stubs and older mempool adapters.
+        get_all = getattr(self.mempool, "get_transactions", None)
+        if not callable(get_all):
+            return []
+        all_txs = await get_all()
 
         txs_with_fees = []
         for tx in all_txs:
@@ -287,16 +298,13 @@ class MiningNode:
                 txs_with_fees.append((tx, fee / size))
 
         txs_with_fees.sort(key=lambda x: x[1], reverse=True)
-
         selected = []
-        current_weight = 4000
-
+        current_weight = reserved_weight
         for tx, _ in txs_with_fees:
             tx_weight = tx.weight()
-            if current_weight + tx_weight <= self.chainstate.params.max_block_weight:
+            if current_weight + tx_weight <= max_weight:
                 selected.append(tx)
                 current_weight += tx_weight
-
         return selected
 
     async def _calculate_fees(self, transactions: List[Transaction]) -> int:
@@ -342,7 +350,12 @@ class MiningNode:
         script_pubkey = builder._create_script_pubkey(self.mining_address)
         txout = TxOut(value=value, script_pubkey=script_pubkey)
 
-        tx = Transaction(version=1)
+        coinbase_version = 2 if is_consensus_feature_active(
+            self.chainstate.params,
+            HARDFORK_TX_V2,
+            int(height),
+        ) else 1
+        tx = Transaction(version=coinbase_version)
         tx.vin.append(txin)
         tx.vout.append(txout)
 
@@ -417,7 +430,7 @@ class MiningNode:
         timestamp = max(int(time.time()), self._get_median_time() + 1)
 
         header = BlockHeader(
-            version=1,
+            version=self._next_block_version(),
             prev_block_hash=bytes.fromhex(best_hash),
             merkle_root=merkle_root_hash,
             timestamp=timestamp,
@@ -473,3 +486,9 @@ class MiningNode:
             return
         logger.debug("Pacing miner for %.2fs to match target block time", remaining)
         await asyncio.sleep(remaining)
+
+    def _next_block_version(self) -> int:
+        getter = getattr(self.chainstate, "get_mining_block_version", None)
+        if callable(getter):
+            return int(getter(0x20000000))
+        return 0x20000000

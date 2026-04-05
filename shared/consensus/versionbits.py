@@ -60,7 +60,11 @@ class VersionBitsTracker:
                 deployment.since_height = height
 
         elif deployment.state == DeploymentState.LOCKED_IN:
-            if height >= deployment.since_height + self.window_size:
+            activation_ready = max(
+                deployment.since_height + self.window_size,
+                int(deployment.min_activation_height),
+            )
+            if height >= activation_ready:
                 deployment.state = DeploymentState.ACTIVE
 
     def get_state(self, name: str) -> Optional[DeploymentState]:
@@ -76,6 +80,18 @@ class VersionBitsTracker:
             if deployment.state == DeploymentState.ACTIVE:
                 mask |= (1 << deployment.bit)
         return mask
+
+    def get_signaling_mask(self) -> int:
+        """Bits miners should set while deployment is progressing."""
+        mask = 0
+        for deployment in self.deployments.values():
+            if deployment.state in (DeploymentState.STARTED, DeploymentState.LOCKED_IN):
+                mask |= (1 << deployment.bit)
+        return mask
+
+    def get_block_version(self, base_version: int = 0x20000000) -> int:
+        """Compose next block version with current versionbits signaling mask."""
+        return int(base_version) | int(self.get_signaling_mask())
 
 def get_standard_deployments(params: Optional[ConsensusParams] = None) -> List[VersionBitsDeployment]:
     """Get standard version bits deployments for the active network profile."""

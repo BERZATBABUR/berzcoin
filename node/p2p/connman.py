@@ -12,6 +12,7 @@ from .addrman import AddrMan
 from .dns_seeds import DNSSeeds
 from .authority import NodeAuthorityChain
 from .peer_scoring import PeerScoringManager
+from .limits import OutboundClass, OutboundPolicy
 
 logger = get_logger()
 
@@ -48,7 +49,19 @@ class ConnectionManager:
         self.max_inbound_per_netgroup = 16
         self.max_outbound_per_netgroup = 2
         self.min_outbound_netgroups = 4
-        self.peer_scores = PeerScoringManager()
+        self.network_hardening = bool(
+            self.node_config.get("network_hardening", False)
+        ) if self.node_config else False
+        self.peer_scores = PeerScoringManager(
+            network_hardening=self.network_hardening
+        )
+        self.outbound_classes: Dict[str, str] = {}
+        self._pending_outbound_class: Dict[str, str] = {}
+        self.outbound_policy = OutboundPolicy()
+        if self.network_hardening:
+            self.min_outbound_netgroups = max(
+                self.min_outbound_netgroups, self.outbound_policy.min_anchor_netgroups
+            )
         self.authority_chain_enabled = bool(
             self.node_config.get("authority_chain_enabled", False)
         ) if self.node_config else False
@@ -56,6 +69,8 @@ class ConnectionManager:
         self.authority_chain = NodeAuthorityChain(trusted_nodes=trusted)
         self._last_getaddr_at: Dict[str, float] = {}
         self._getaddr_interval_secs = 180
+        self._last_feeler_at = 0.0
+        self._last_rotation_at = 0.0
 
     @staticmethod
     def _split_host_port(address: str, default_port: int) -> tuple[str, int]:
@@ -92,14 +107,25 @@ class ConnectionManager:
         if not self.node_config:
             return
         cfg = self.node_config
+        connect = cfg.get_connect_peers()
+        if connect:
+            # Strict priority: when connect=... is set, it is the only discovery source.
+            for addr in connect:
+                self.addrman.add_static_peer(addr, priority=0)
+            logger.info("Loaded %s connect peer(s) (connect-only discovery)", len(connect))
+            return
+
+        addnodes = cfg.get_addnode_peers()
+        for addr in addnodes:
+            self.addrman.add_static_peer(addr, priority=10)
+
         if cfg.get("bootstrap_enabled", True):
             nodes = cfg.get_bootstrap_nodes()
             if nodes:
-                self.addrman.add_bootstrap_nodes(nodes)
-        for addr in cfg.get_addnode_peers():
-            self.addrman.add_static_peer(addr)
-        for addr in cfg.get_connect_peers():
-            self.addrman.add_static_peer(addr)
+                self.addrman.add_bootstrap_nodes(nodes, priority=20)
+
+        if addnodes:
+            logger.info("Loaded %s addnode peer(s)", len(addnodes))
 
     async def _load_bootstrap_nodes(self):
         """Load bootstrap nodes from config file."""
@@ -155,6 +181,9 @@ class ConnectionManager:
     async def start(self) -> None:
         self._running = True
         self._load_peers_from_config()
+        if self.network_hardening:
+            for anchor in self.addrman.get_anchor_peers():
+                self.addrman.add(anchor)
         # Start inbound listener unless in connect-only mode.
         if not self.connect_only:
             try:
@@ -250,6 +279,9 @@ class ConnectionManager:
                 if needed > 0:
                     await self._connect_outbound(needed)
                 await self._evict_bad_outbound()
+                if self.network_hardening:
+                    await self._maybe_run_feeler()
+                    await self._maybe_rotate_outbound()
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
                 break
@@ -258,51 +290,121 @@ class ConnectionManager:
                 await asyncio.sleep(30)
 
     async def _connect_outbound(self, count: int) -> None:
-        addresses = self.addrman.get_addresses(count * 2)
-        if len(addresses) < count and self.dns_seeds:
-            seeds = await self.dns_seeds.get_seeds()
-            for seed in seeds:
-                if seed not in self.peers:
-                    addresses.append(seed)
-        random.shuffle(addresses)
         connected = 0
         netgroup_counts = self._outbound_netgroup_counts()
-        for addr in addresses:
+        class_plan = (
+            self._desired_outbound_classes()
+            if self.network_hardening
+            else [OutboundClass.FULL_RELAY] * max(0, int(count))
+        )
+        for outbound_class in class_plan[:count]:
+            addresses = self._candidate_addresses_for_class(outbound_class, count)
+            for addr in addresses:
+                if connected >= count:
+                    break
+                if addr in self.peers:
+                    continue
+                netgroup = self._netgroup_for_address(addr)
+                if netgroup and netgroup_counts.get(netgroup, 0) >= self.max_outbound_per_netgroup:
+                    continue
+                score = self.peer_scores.get_score(addr)
+                if not score.should_connect():
+                    continue
+                if await self._connect_outbound_address(addr, outbound_class):
+                    if netgroup:
+                        netgroup_counts[netgroup] = netgroup_counts.get(netgroup, 0) + 1
+                    connected += 1
+                    break
             if connected >= count:
                 break
-            if addr in self.peers:
+
+    def _candidate_addresses_for_class(self, outbound_class: str, count: int) -> List[str]:
+        if not self.network_hardening:
+            addresses = self.addrman.get_addresses(max(1, count * 2))
+            if self.dns_seeds and len(addresses) < count:
+                # best-effort non-blocking fallback list; discovery loop resolves in background
+                addresses.extend([s for s in self.dns_seeds.cache if s not in addresses])
+            random.shuffle(addresses)
+            return addresses
+
+        candidates: List[str] = []
+        if outbound_class == OutboundClass.ANCHOR:
+            candidates.extend(sorted(self.addrman.get_anchor_peers()))
+        candidates.extend(self.addrman.get_addresses(max(4, count * 3)))
+        # Deterministic ordering to make rotation behavior reproducible.
+        seen: Set[str] = set()
+        ordered: List[str] = []
+        for addr in candidates:
+            if addr in seen:
                 continue
-            netgroup = self._netgroup_for_address(addr)
-            if netgroup and netgroup_counts.get(netgroup, 0) >= self.max_outbound_per_netgroup:
-                continue
-            score = self.peer_scores.get_score(addr)
-            if not score.should_connect():
-                continue
-            default_port = self._default_p2p_port()
-            host, port = self._split_host_port(addr, default_port)
-            if not host:
-                continue
-            peer = Peer(host, int(port), is_outbound=True)
-            peer.on_message = self.on_message
-            peer.on_disconnect = self._on_peer_disconnect
-            if await peer.connect():
-                self._add_peer(peer)
-                self.peer_scores.record_good(peer.address)
-                self.addrman.mark_good(peer.address)
-                if self.authority_chain_enabled:
-                    self.authority_chain.verify_from_local(peer.address)
-                if netgroup:
-                    netgroup_counts[netgroup] = netgroup_counts.get(netgroup, 0) + 1
-                connected += 1
-                logger.info(f"Connected to {peer.address}")
-            else:
-                self.peer_scores.record_bad(addr, "connect_failed")
-                self.addrman.mark_failed(addr)
+            seen.add(addr)
+            ordered.append(addr)
+        ordered.sort(key=lambda a: (-self.peer_scores.get_score(a).score, a))
+        return ordered
+
+    async def _connect_outbound_address(self, addr: str, outbound_class: str) -> bool:
+        default_port = self._default_p2p_port()
+        host, port = self._split_host_port(addr, default_port)
+        if not host:
+            return False
+        peer = Peer(host, int(port), is_outbound=True)
+        peer.on_message = self.on_message
+        peer.on_disconnect = self._on_peer_disconnect
+        self._pending_outbound_class[peer.address] = outbound_class
+        if await peer.connect():
+            self._add_peer(peer)
+            self.peer_scores.record_good(peer.address)
+            self.addrman.mark_good(peer.address)
+            if self.authority_chain_enabled:
+                self.authority_chain.verify_from_local(peer.address)
+            if self.network_hardening and outbound_class == OutboundClass.ANCHOR:
+                self.addrman.add_anchor_peer(peer.address)
+            logger.info("Connected to %s (%s)", peer.address, outbound_class)
+            return True
+        self._pending_outbound_class.pop(peer.address, None)
+        self.peer_scores.record_bad(addr, "connect_failed")
+        self.addrman.mark_failed(addr)
+        return False
+
+    def _outbound_class_counts(self) -> Dict[str, int]:
+        counts: Dict[str, int] = {
+            OutboundClass.ANCHOR: 0,
+            OutboundClass.FULL_RELAY: 0,
+            OutboundClass.BLOCK_RELAY_ONLY: 0,
+            OutboundClass.FEELER: 0,
+        }
+        for klass in self.outbound_classes.values():
+            counts[klass] = counts.get(klass, 0) + 1
+        return counts
+
+    def _desired_outbound_classes(self) -> List[str]:
+        counts = self._outbound_class_counts()
+        remaining = max(0, self.max_outbound - len(self.outbound_peers))
+        plan: List[str] = []
+        while remaining > 0 and counts.get(OutboundClass.ANCHOR, 0) < self.outbound_policy.target_anchor_peers:
+            plan.append(OutboundClass.ANCHOR)
+            counts[OutboundClass.ANCHOR] += 1
+            remaining -= 1
+        while (
+            remaining > 0
+            and counts.get(OutboundClass.BLOCK_RELAY_ONLY, 0)
+            < self.outbound_policy.target_block_relay_only_peers
+        ):
+            plan.append(OutboundClass.BLOCK_RELAY_ONLY)
+            counts[OutboundClass.BLOCK_RELAY_ONLY] += 1
+            remaining -= 1
+        plan.extend([OutboundClass.FULL_RELAY] * remaining)
+        return plan
 
     def _add_peer(self, peer: Peer) -> None:
         self.peers[peer.address] = peer
         if peer.is_outbound:
             self.outbound_peers[peer.address] = peer
+            klass = self._pending_outbound_class.pop(
+                peer.address,
+                OutboundClass.FULL_RELAY,
+            )
+            self.outbound_classes[peer.address] = klass
         else:
             self.inbound_peers[peer.address] = peer
         if self.on_peer_connected:
@@ -312,6 +414,8 @@ class ConnectionManager:
         self.peers.pop(peer.address, None)
         self.outbound_peers.pop(peer.address, None)
         self.inbound_peers.pop(peer.address, None)
+        self.outbound_classes.pop(peer.address, None)
+        self._pending_outbound_class.pop(peer.address, None)
         if self.on_peer_disconnected:
             await self.on_peer_disconnected(peer)
         logger.info(f"Peer disconnected: {peer.address}")
@@ -431,6 +535,28 @@ class ConnectionManager:
                 protected.add(peer.address)
                 if len(protected) >= self.min_outbound_netgroups:
                     break
+        if self.network_hardening:
+            anchor_peers = [
+                p for p in self.outbound_peers.values()
+                if self.outbound_classes.get(p.address) == OutboundClass.ANCHOR
+            ]
+            anchor_groups: Dict[str, List[Peer]] = {}
+            for peer in anchor_peers:
+                grp = self._netgroup_for_address(peer.address)
+                anchor_groups.setdefault(grp, []).append(peer)
+            kept_groups = 0
+            for grp in sorted(anchor_groups.keys()):
+                best = max(
+                    anchor_groups[grp],
+                    key=lambda p: (
+                        self.peer_scores.get_score(p.address).score,
+                        getattr(p, "connected_at", 0.0),
+                    ),
+                )
+                protected.add(best.address)
+                kept_groups += 1
+                if kept_groups >= self.outbound_policy.min_anchor_netgroups:
+                    break
         return protected
 
     def _select_outbound_eviction_candidate(self) -> Optional[Peer]:
@@ -541,6 +667,79 @@ class ConnectionManager:
         except Exception:
             return False
 
+    async def _maybe_run_feeler(self) -> None:
+        now = asyncio.get_event_loop().time()
+        if now - self._last_feeler_at < float(self.outbound_policy.feeler_interval_secs):
+            return
+        self._last_feeler_at = now
+        candidate = self._select_feeler_candidate()
+        if not candidate:
+            return
+        await self._run_feeler(candidate)
+
+    def _select_feeler_candidate(self) -> Optional[str]:
+        candidates = self.addrman.get_addresses(32)
+        connected = set(self.peers.keys())
+        filtered = [c for c in candidates if c not in connected]
+        if not filtered:
+            return None
+        filtered.sort(
+            key=lambda a: (
+                self.peer_scores.get_score(a).failures,
+                -self.peer_scores.get_score(a).score,
+                a,
+            )
+        )
+        return filtered[0]
+
+    async def _run_feeler(self, address: str) -> None:
+        default_port = self._default_p2p_port()
+        host, port = self._split_host_port(address, default_port)
+        if not host:
+            return
+        peer = Peer(host, int(port), is_outbound=True)
+        ok = await peer.connect()
+        if ok:
+            self.addrman.mark_good(peer.address)
+            self.peer_scores.record_good(peer.address)
+            await peer.disconnect()
+        else:
+            self.addrman.mark_failed(address)
+            self.peer_scores.record_bad(address, "connect_failed")
+
+    async def _maybe_rotate_outbound(self) -> None:
+        now = asyncio.get_event_loop().time()
+        if now - self._last_rotation_at < float(self.outbound_policy.rotation_interval_secs):
+            return
+        self._last_rotation_at = now
+        if len(self.outbound_peers) < max(2, self.max_outbound):
+            return
+        candidate = self._select_rotation_candidate()
+        if candidate is None:
+            return
+        await candidate.disconnect()
+        self.peer_scores.record_bad(candidate.address, "stale_peer")
+
+    def _select_rotation_candidate(self) -> Optional[Peer]:
+        protected = self._protected_outbound_addresses()
+        candidates = [
+            p for p in self.outbound_peers.values()
+            if p.address not in protected
+        ]
+        if not candidates:
+            return None
+        net_counts = self._outbound_netgroup_counts()
+        now = asyncio.get_event_loop().time()
+        return min(
+            candidates,
+            key=lambda p: (
+                self.peer_scores.get_score(p.address).score,
+                -(now - float(getattr(p, "connected_at", now))),
+                -net_counts.get(self._netgroup_for_address(p.address), 0),
+                p.address,
+            ),
+        )
+
     async def broadcast(self, command: str, payload: bytes, exclude: Optional[Set[str]] = None) -> None:
         exclude = exclude or set()
         for peer in self.peers.values():
@@ -609,10 +808,23 @@ class ConnectionManager:
         return [p for p in self.peers.values() if abs(p.peer_height - current_height) <= tolerance]
 
     def get_stats(self) -> Dict[str, int]:
-        return {
+        stats = {
             'total': self.get_connected_count(),
             'outbound': self.get_outbound_count(),
             'inbound': self.get_inbound_count(),
             'max': self.max_connections,
             'max_outbound': self.max_outbound,
         }
+        if self.network_hardening:
+            stats.update(
+                {
+                    "anchors": self._outbound_class_counts().get(OutboundClass.ANCHOR, 0),
+                    "block_relay_only": self._outbound_class_counts().get(
+                        OutboundClass.BLOCK_RELAY_ONLY, 0
+                    ),
+                    "full_relay": self._outbound_class_counts().get(
+                        OutboundClass.FULL_RELAY, 0
+                    ),
+                }
+            )
+        return stats

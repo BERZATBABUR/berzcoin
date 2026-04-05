@@ -33,6 +33,7 @@ Blockchain:
 
 Mempool:
 - `get_mempool_info`
+- `get_mempool_diagnostics`
 - `get_raw_mempool`
 - `send_raw_transaction`
 - `submit_package`

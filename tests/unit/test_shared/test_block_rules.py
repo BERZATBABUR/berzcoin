@@ -3,6 +3,7 @@
 import time
 import unittest
 
+from shared.consensus.buried_deployments import HARDFORK_TX_V2, SOFTFORK_BIP34_STRICT
 from shared.consensus.params import ConsensusParams
 from shared.consensus.pow import ProofOfWork
 from shared.consensus.rules import ConsensusRules
@@ -91,6 +92,44 @@ class TestBlockRules(unittest.TestCase):
 
         rules = ConsensusRules(params, output_value_lookup=lookup)
         self.assertTrue(rules.validate_block(block, prev_block=None, height=0))
+
+    def test_softfork_strict_bip34_enforces_minimal_height_encoding(self) -> None:
+        height = 200
+        height_bytes = height.to_bytes((height.bit_length() + 7) // 8, "little")
+        cb = _coinbase(b"\x03\xaa\xbb" + height_bytes)
+
+        legacy_params = ConsensusParams.regtest()
+        legacy_rules = ConsensusRules(legacy_params)
+        self.assertTrue(legacy_rules.validate_coinbase_height(cb, height))
+
+        strict_params = ConsensusParams.regtest()
+        strict_params.custom_activation_heights = {SOFTFORK_BIP34_STRICT: 0}
+        strict_rules = ConsensusRules(strict_params)
+        with self.assertRaises(ValueError):
+            strict_rules.validate_coinbase_height(cb, height)
+
+    def test_hardfork_v2_tx_version_rejects_v1_after_activation(self) -> None:
+        params = ConsensusParams.regtest()
+        params.custom_activation_heights = {HARDFORK_TX_V2: 300}
+        rules = ConsensusRules(params)
+
+        tx = Transaction(version=1)
+        tx.vin = [
+            TxIn(
+                prev_tx_hash=bytes.fromhex("11" * 32),
+                prev_tx_index=0,
+                script_sig=b"\x01\x01",
+                sequence=0xFFFFFFFF,
+            )
+        ]
+        tx.vout = [TxOut(value=1, script_pubkey=b"\x51")]
+
+        # Pre-activation still allows version 1.
+        self.assertTrue(rules.validate_transaction(tx, height=299))
+
+        # Post-activation rejects version 1.
+        with self.assertRaises(ValueError):
+            rules.validate_transaction(tx, height=300)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,13 @@
 """Mempool persistence storage."""
 
+from __future__ import annotations
+
+import hashlib
 import json
 import time
-import pickle
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, Optional
+
 from shared.core.transaction import Transaction
 from shared.utils.logging import get_logger
 from node.mempool.pool import MempoolEntry
@@ -12,74 +15,162 @@ from node.mempool.pool import MempoolEntry
 logger = get_logger()
 
 class MempoolStore:
+    SNAPSHOT_MAGIC = "berzcoin-mempool"
+    SNAPSHOT_VERSION = 2
+
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
         self.mempool_file = data_dir / "mempool.dat"
         self.backup_file = data_dir / "mempool.dat.bak"
 
-    def save(self, transactions: Dict[str, MempoolEntry]) -> bool:
+    @staticmethod
+    def _canonical_json(value: Any) -> bytes:
+        return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    @classmethod
+    def _checksum_payload(cls, payload: Dict[str, Any]) -> str:
+        return hashlib.sha256(cls._canonical_json(payload)).hexdigest()
+
+    def _build_payload(
+        self,
+        transactions: Dict[str, MempoolEntry],
+        *,
+        network: str,
+        tip_hash: Optional[str],
+        tip_height: int,
+        rules_fingerprint: str,
+    ) -> Dict[str, Any]:
+        entries = []
+        for txid in sorted(transactions.keys()):
+            entry = transactions[txid]
+            entries.append(
+                {
+                    "txid": txid,
+                    "transaction": entry.tx.serialize(include_witness=True).hex(),
+                    "fee": int(entry.fee),
+                    "fee_rate": float(entry.fee_rate),
+                    "time_added": float(entry.time_added),
+                    "height_added": int(entry.height_added),
+                }
+            )
+        return {
+            "metadata": {
+                "created_at": int(time.time()),
+                "network": str(network or "unknown"),
+                "tip_hash": str(tip_hash or ""),
+                "tip_height": int(tip_height),
+                "rules_fingerprint": str(rules_fingerprint or ""),
+            },
+            "entries": entries,
+        }
+
+    def _write_snapshot(self, payload: Dict[str, Any]) -> bool:
+        envelope = {
+            "magic": self.SNAPSHOT_MAGIC,
+            "version": self.SNAPSHOT_VERSION,
+            "checksum": self._checksum_payload(payload),
+            "payload": payload,
+        }
         try:
-            data = []
-            for txid, entry in transactions.items():
-                data.append({
-                    'txid': txid,
-                    'transaction': entry.tx.serialize().hex(),
-                    'fee': entry.fee,
-                    'fee_rate': entry.fee_rate,
-                    'time_added': entry.time_added,
-                    'height_added': entry.height_added,
-                    'ancestors': list(entry.ancestors),
-                    'descendants': list(entry.descendants),
-                })
             if self.mempool_file.exists():
                 import shutil
+
                 shutil.copy(self.mempool_file, self.backup_file)
-            with open(self.mempool_file, 'wb') as f:
-                pickle.dump(data, f)
-            logger.info(f"Saved {len(data)} transactions to mempool.dat")
+            tmp_file = self.mempool_file.with_suffix(".dat.tmp")
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(envelope, f, sort_keys=True, separators=(",", ":"))
+                f.flush()
+            tmp_file.replace(self.mempool_file)
             return True
         except Exception as e:
             logger.error(f"Failed to save mempool: {e}")
             return False
 
-    def load(self) -> Dict[str, MempoolEntry]:
-        if not self.mempool_file.exists():
-            logger.info("No mempool.dat found")
-            return {}
+    def save(
+        self,
+        transactions: Dict[str, MempoolEntry],
+        *,
+        network: str = "unknown",
+        tip_hash: Optional[str] = None,
+        tip_height: int = -1,
+        rules_fingerprint: str = "",
+    ) -> bool:
+        payload = self._build_payload(
+            transactions,
+            network=network,
+            tip_hash=tip_hash,
+            tip_height=tip_height,
+            rules_fingerprint=rules_fingerprint,
+        )
+        ok = self._write_snapshot(payload)
+        if ok:
+            logger.info("Saved %s transactions to mempool.dat", len(payload.get("entries", [])))
+        return ok
+
+    def _read_snapshot_file(self, path: Path) -> Optional[Dict[str, Any]]:
         try:
-            with open(self.mempool_file, 'rb') as f:
-                data = pickle.load(f)
-            transactions = {}
-            for tx_data in data:
-                tx_bytes = bytes.fromhex(tx_data['transaction'])
+            with open(path, "r", encoding="utf-8") as f:
+                envelope = json.load(f)
+            if not isinstance(envelope, dict):
+                raise ValueError("invalid envelope")
+            if envelope.get("magic") != self.SNAPSHOT_MAGIC:
+                raise ValueError("invalid magic")
+            if int(envelope.get("version", -1)) != int(self.SNAPSHOT_VERSION):
+                raise ValueError("unsupported snapshot version")
+            payload = envelope.get("payload")
+            if not isinstance(payload, dict):
+                raise ValueError("missing payload")
+            expected = str(envelope.get("checksum", ""))
+            actual = self._checksum_payload(payload)
+            if expected != actual:
+                raise ValueError("checksum mismatch")
+            return payload
+        except Exception as e:
+            logger.warning("Failed to read mempool snapshot %s: %s", path, e)
+            return None
+
+    def load_snapshot(self) -> Optional[Dict[str, Any]]:
+        if not self.mempool_file.exists() and not self.backup_file.exists():
+            logger.info("No mempool snapshot found")
+            return None
+        snapshot = self._read_snapshot_file(self.mempool_file)
+        if snapshot is not None:
+            return snapshot
+        if self.backup_file.exists():
+            logger.info("Trying backup mempool snapshot")
+            return self._read_snapshot_file(self.backup_file)
+        return None
+
+    def load(self) -> Dict[str, MempoolEntry]:
+        snapshot = self.load_snapshot()
+        if snapshot is None:
+            return {}
+        transactions: Dict[str, MempoolEntry] = {}
+        entries = snapshot.get("entries", [])
+        if not isinstance(entries, list):
+            return {}
+        for tx_data in entries:
+            try:
+                tx_bytes = bytes.fromhex(str(tx_data["transaction"]))
                 tx, _ = Transaction.deserialize(tx_bytes)
                 entry = MempoolEntry(
                     tx=tx,
-                    txid=tx_data['txid'],
-                    size=len(tx.serialize()),
+                    txid=str(tx_data["txid"]),
+                    size=len(tx.serialize(include_witness=True)),
                     vsize=max(1, (tx.weight() + 3) // 4),
                     weight=tx.weight(),
-                    fee=tx_data['fee'],
-                    fee_rate=tx_data['fee_rate'],
-                    time_added=tx_data['time_added'],
-                    height_added=tx_data['height_added'],
-                    ancestors=set(tx_data['ancestors']),
-                    descendants=set(tx_data['descendants']),
+                    fee=int(tx_data.get("fee", 0)),
+                    fee_rate=float(tx_data.get("fee_rate", 0.0)),
+                    time_added=float(tx_data.get("time_added", time.time())),
+                    height_added=int(tx_data.get("height_added", -1)),
+                    ancestors=set(),
+                    descendants=set(),
                 )
-                transactions[tx_data['txid']] = entry
-            logger.info(f"Loaded {len(transactions)} transactions from mempool.dat")
-            return transactions
-        except Exception as e:
-            logger.error(f"Failed to load mempool: {e}")
-            if self.backup_file.exists():
-                logger.info("Trying backup file...")
-                try:
-                    with open(self.backup_file, 'rb') as f:
-                        data = pickle.load(f)
-                    logger.info("Loaded from backup")
-                except Exception:
-                    pass
-            return {}
+                transactions[str(tx_data["txid"])] = entry
+            except Exception as e:
+                logger.warning("Skipping malformed mempool entry during load: %s", e)
+        logger.info("Loaded %s transactions from mempool.dat", len(transactions))
+        return transactions
 
     def save_json(self, transactions: Dict[str, MempoolEntry]) -> bool:
         try:

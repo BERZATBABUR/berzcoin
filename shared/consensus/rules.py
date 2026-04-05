@@ -5,6 +5,11 @@ from datetime import datetime
 from ..core.block import Block, BlockHeader
 from ..core.transaction import Transaction
 from ..utils.time import current_time, median_time_past
+from .buried_deployments import (
+    HARDFORK_TX_V2,
+    SOFTFORK_BIP34_STRICT,
+    is_consensus_feature_active,
+)
 from .params import ConsensusParams
 
 class ConsensusRules:
@@ -21,7 +26,8 @@ class ConsensusRules:
         self.output_value_lookup = output_value_lookup
     
     def validate_block_header(self, header: BlockHeader, prev_header: Optional[BlockHeader] = None) -> bool:
-        if header.version < 1 or header.version > 0x20000000:
+        # Allow BIP9-style versionbits in top-bit "001" namespace.
+        if header.version < 1 or header.version > 0x3fffffff:
             raise ValueError(f"Invalid version: {header.version}")
         # Consensus: headers must not be too far in the future.
         # Historical blocks (including genesis) are valid, so do not enforce
@@ -73,6 +79,10 @@ class ConsensusRules:
         return True
 
     def validate_transaction(self, tx: Transaction, height: int = 0) -> bool:
+        if is_consensus_feature_active(self.params, HARDFORK_TX_V2, height):
+            if int(getattr(tx, "version", 1)) < 2:
+                raise ValueError("Transaction version below hardfork_v2 minimum")
+
         if len(tx.vin) == 0 or len(tx.vout) == 0:
             raise ValueError("Empty transaction")
 
@@ -103,7 +113,17 @@ class ConsensusRules:
         script = coinbase.vin[0].script_sig
         if len(script) == 0:
             raise ValueError("Empty coinbase script")
-        if script[0] != len(height_bytes):
+        strict_bip34 = is_consensus_feature_active(
+            self.params, SOFTFORK_BIP34_STRICT, height
+        )
+        if strict_bip34:
+            if len(script) < 1 + len(height_bytes):
+                raise ValueError("Coinbase script too short for strict BIP34")
+            if script[0] != len(height_bytes):
+                raise ValueError("Coinbase height push length mismatch")
+            if script[1:1 + len(height_bytes)] != height_bytes:
+                raise ValueError("Coinbase height must be minimally encoded at script start")
+        elif script[0] != len(height_bytes):
             if height_bytes not in script:
                 raise ValueError(f"Coinbase height {height} not found in script")
         return True

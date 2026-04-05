@@ -53,6 +53,40 @@ class WalletCommands:
         p.add_argument('private_key', help='Wallet private key hex')
         p.set_defaults(command='activatewallet')
 
+        p = subparsers.add_parser('walletpassphrase', help='Unlock wallet for signing for N seconds')
+        p.add_argument('passphrase', help='Wallet passphrase')
+        p.add_argument('timeout', type=int, help='Unlock timeout in seconds')
+        p.set_defaults(command='walletpassphrase')
+
+        p = subparsers.add_parser('walletlock', help='Lock wallet immediately')
+        p.set_defaults(command='walletlock')
+
+        p = subparsers.add_parser('importxpubwatchonly', help='Import watch-only account xpub')
+        p.add_argument('xpub', help='Account-level xpub/tpub')
+        p.add_argument('--label', default='', help='Optional wallet label')
+        p.set_defaults(command='importxpubwatchonly')
+
+        p = subparsers.add_parser('walletcreatefundedpsbt', help='Create funded PSBT for offline signing')
+        p.add_argument('address', help='Recipient address')
+        p.add_argument('amount', type=float, help='Amount in BTC')
+        p.add_argument('--feerate', type=int, help='Fee rate in sat/vbyte')
+        p.set_defaults(command='walletcreatefundedpsbt')
+
+        p = subparsers.add_parser('walletprocesspsbt', help='Process/sign PSBT with wallet key')
+        p.add_argument('psbt', help='PSBT base64 payload')
+        p.add_argument('--sign', choices=['true', 'false'], default='true')
+        p.set_defaults(command='walletprocesspsbt')
+
+        p = subparsers.add_parser('finalizepsbt', help='Finalize PSBT to transaction hex')
+        p.add_argument('psbt', help='PSBT base64 payload')
+        p.set_defaults(command='finalizepsbt')
+
+        p = subparsers.add_parser('createmultisigpolicy', help='Create watch-only multisig policy (P2SH)')
+        p.add_argument('required', type=int, help='Required signatures (m)')
+        p.add_argument('pubkeys', nargs='+', help='Hex pubkeys')
+        p.add_argument('--label', default='', help='Optional policy label')
+        p.set_defaults(command='createmultisigpolicy')
+
 
     async def get_wallet_info(self):
         return await self.handler.call('get_wallet_info')
@@ -82,3 +116,24 @@ class WalletCommands:
 
     async def activate_wallet(self, private_key: str) -> Any:
         return await self.handler.call('activatewallet', private_key)
+
+    async def wallet_passphrase(self, passphrase: str, timeout: int) -> Any:
+        return await self.handler.call('walletpassphrase', passphrase, timeout)
+
+    async def wallet_lock(self) -> Any:
+        return await self.handler.call('walletlock')
+
+    async def import_xpub_watchonly(self, xpub: str, label: str = "") -> Any:
+        return await self.handler.call('importxpubwatchonly', xpub, label)
+
+    async def wallet_create_funded_psbt(self, address: str, amount: float, feerate: Optional[int] = None) -> Any:
+        return await self.handler.call('walletcreatefundedpsbt', address, amount, feerate)
+
+    async def wallet_process_psbt(self, psbt: str, sign: bool = True) -> Any:
+        return await self.handler.call('walletprocesspsbt', psbt, sign)
+
+    async def finalize_psbt(self, psbt: str) -> Any:
+        return await self.handler.call('finalizepsbt', psbt)
+
+    async def create_multisig_policy(self, required: int, pubkeys: List[str], label: str = "") -> Any:
+        return await self.handler.call('createmultisigpolicy', required, pubkeys, label)

@@ -1,0 +1,13 @@
+{
+  "saved_at": 1775420542,
+  "scores": {
+    "127.0.0.1:18444": {
+      "score": 10,
+      "last_seen": 1775420542.3996952,
+      "last_connected": 1775420542.3996925,
+      "failures": 0,
+      "successes": 1,
+      "bans": 0
+    }
+  }
+}

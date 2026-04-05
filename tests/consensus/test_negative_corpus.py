@@ -97,7 +97,7 @@ class TestConsensusNegativeCorpus(unittest.TestCase):
         blk = _valid_block(self.params, height=0)
 
         if name == "bad_header_version":
-            blk.header.version = 0x30000000
+            blk.header.version = 0x80000000
         elif name == "future_timestamp":
             blk.header.timestamp = int(time.time()) + 60 * 60 * 4
         elif name == "bad_pow":

@@ -28,3 +28,6 @@ htmlcov/
 # IDE
 .idea/
 .vscode/
+
+# Runtime artifacts
+artifacts/

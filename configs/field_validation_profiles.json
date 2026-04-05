@@ -1,0 +1,46 @@
+{
+  "stages": {
+    "A": {
+      "nodes": 5,
+      "chaos_steps": 1600,
+      "mempool_chaos_steps": 2600,
+      "chaos_long_steps": 7000,
+      "integration_steps": 1200,
+      "fault_soak_iters": 600,
+      "slo": {
+        "tip_convergence_max_steps": 30,
+        "max_reorg_depth": 8,
+        "mempool_peak_vsize_max": 300000,
+        "reject_rate_max": 0.35
+      }
+    },
+    "B": {
+      "nodes": 20,
+      "chaos_steps": 2600,
+      "mempool_chaos_steps": 3600,
+      "chaos_long_steps": 10000,
+      "integration_steps": 2000,
+      "fault_soak_iters": 900,
+      "slo": {
+        "tip_convergence_max_steps": 45,
+        "max_reorg_depth": 12,
+        "mempool_peak_vsize_max": 300000,
+        "reject_rate_max": 0.4
+      }
+    },
+    "C": {
+      "nodes": 50,
+      "chaos_steps": 3600,
+      "mempool_chaos_steps": 5200,
+      "chaos_long_steps": 14000,
+      "integration_steps": 2800,
+      "fault_soak_iters": 1200,
+      "slo": {
+        "tip_convergence_max_steps": 60,
+        "max_reorg_depth": 16,
+        "mempool_peak_vsize_max": 300000,
+        "reject_rate_max": 0.45
+      }
+    }
+  }
+}

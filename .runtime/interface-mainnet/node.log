@@ -1,0 +1,191 @@
+2026-04-05 23:22:22 - berzcoin - INFO - Loaded configuration from /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/interface-mainnet/berzcoin.conf
+2026-04-05 23:22:22 - berzcoin - INFO - Initializing BerzCoin node...
+2026-04-05 23:22:22 - berzcoin - INFO - Connected to database: /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/interface-mainnet/mainnet.db
+2026-04-05 23:22:22 - berzcoin - INFO - Current version: 0, Target version: 7
+2026-04-05 23:22:22 - berzcoin - INFO - Applying migration 1: Initial schema
+2026-04-05 23:22:22 - berzcoin - DEBUG - Table created/verified: blocks
+2026-04-05 23:22:22 - berzcoin - DEBUG - Table created/verified: block_headers
+2026-04-05 23:22:22 - berzcoin - DEBUG - Table created/verified: transactions
+2026-04-05 23:22:22 - berzcoin - DEBUG - Table created/verified: inputs
+2026-04-05 23:22:22 - berzcoin - DEBUG - Table created/verified: outputs
+2026-04-05 23:22:22 - berzcoin - DEBUG - Table created/verified: utxo
+2026-04-05 23:22:22 - berzcoin - DEBUG - Table created/verified: peers
+2026-04-05 23:22:22 - berzcoin - DEBUG - Table created/verified: bans
+2026-04-05 23:22:22 - berzcoin - DEBUG - Table created/verified: checkpoints
+2026-04-05 23:22:22 - berzcoin - DEBUG - Table created/verified: migrations
+2026-04-05 23:22:22 - berzcoin - DEBUG - Table created/verified: settings
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_blocks_height
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_blocks_hash
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_blocks_prev_hash
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_blocks_timestamp
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_block_headers_height
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_block_headers_prev_hash
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_transactions_block
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_transactions_height
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_transactions_txid
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_inputs_prev
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_outputs_address
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_outputs_spent
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_outputs_txid
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_utxo_address
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_utxo_height
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_peers_last_seen
+2026-04-05 23:22:22 - berzcoin - DEBUG - Index created/verified: idx_peers_banned
+2026-04-05 23:22:22 - berzcoin - INFO - Applying migration 2: Add address indexes
+2026-04-05 23:22:22 - berzcoin - INFO - Applying migration 3: Add chainwork to block_headers
+2026-04-05 23:22:22 - berzcoin - INFO - Applying migration 4: Add witness data to inputs
+2026-04-05 23:22:22 - berzcoin - INFO - Applying migration 5: Add transaction weight
+2026-04-05 23:22:22 - berzcoin - INFO - Applying migration 6: Transaction index tables (tx_index, tx_inputs, tx_outputs)
+2026-04-05 23:22:22 - berzcoin - INFO - Applying migration 7: Allow non-unique block heights for fork branch persistence
+2026-04-05 23:22:22 - berzcoin - INFO - Migration complete. Now at version 7
+2026-04-05 23:22:22 - berzcoin - INFO - Loaded 0 blocks from index
+2026-04-05 23:22:22 - berzcoin - INFO - Chain state initialized: height=-1, work=0
+2026-04-05 23:22:22 - berzcoin - INFO - No mempool snapshot found
+2026-04-05 23:22:22 - berzcoin - INFO - Peer discovery sources priority: connect=0 addnode=1 bootstrap=0 dns=0
+2026-04-05 23:22:22 - berzcoin - WARNING - Using insecure fallback wallet encryption passphrase; set wallet_encryption_passphrase
+2026-04-05 23:22:22 - berzcoin - INFO - Secure RPC cookie created: /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/interface-mainnet/.cookie
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_info
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: stop
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: help
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_network_info
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: ping
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: uptime
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_health
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_readiness
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_metrics
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: listbanned
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: setban
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: clearbanned
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_blockchain_info
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_block
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_block_count
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_best_block_hash
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_mempool_info
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_mempool_diagnostics
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_raw_mempool
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: send_raw_transaction
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: submit_package
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_wallet_info
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_balance
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_new_address
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: send_to_address
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: importxpubwatchonly
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: walletcreatefundedpsbt
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: walletprocesspsbt
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: finalizepsbt
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: createmultisigpolicy
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: createwallet
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: loadwallet
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: listwallets
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: activatewallet
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: walletpassphrase
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: walletlock
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_mining_info
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: get_block_template
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: submit_block
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: generate
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: setgenerate
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: getminingstatus
+2026-04-05 23:22:22 - berzcoin - DEBUG - Registered RPC method: setminingaddress
+2026-04-05 23:22:22 - berzcoin - INFO - Mining/Wallet Dashboard started on http://127.0.0.1:18080
+2026-04-05 23:22:22 - berzcoin - INFO - Web dashboard on http://127.0.0.1:18080
+2026-04-05 23:22:22 - berzcoin - INFO - Node initialized successfully
+2026-04-05 23:22:22 - berzcoin - INFO - Starting BerzCoin node...
+2026-04-05 23:22:22 - berzcoin - DEBUG - Added address: 127.0.0.1:18444
+2026-04-05 23:22:22 - berzcoin - INFO - Added static peer: 127.0.0.1:18444
+2026-04-05 23:22:22 - berzcoin - INFO - Loaded 1 addnode peer(s)
+2026-04-05 23:22:22 - berzcoin - INFO - P2P listener started on 0.0.0.0:28544
+2026-04-05 23:22:22 - berzcoin - INFO - Connection manager started
+2026-04-05 23:22:22 - berzcoin - INFO - RPC server started on http://127.0.0.1:28543
+2026-04-05 23:22:22 - berzcoin - INFO - Chain empty, running bootstrap...
+2026-04-05 23:22:22 - berzcoin - INFO - Starting full chain sync...
+2026-04-05 23:22:22 - berzcoin - WARNING - No peers available for sync
+2026-04-05 23:22:22 - berzcoin - WARNING - No blocks available for replay
+2026-04-05 23:22:22 - berzcoin - INFO - Node started
+2026-04-05 23:22:22 - berzcoin - INFO - Starting block sync loop
+2026-04-05 23:22:22 - berzcoin - INFO - Peer version: 70015, user agent: /BerzCoin:1.0/, height: 0
+2026-04-05 23:22:22 - berzcoin - INFO - Handshake complete with 127.0.0.1
+2026-04-05 23:22:22 - berzcoin - INFO - Connected to 127.0.0.1:18444
+2026-04-05 23:22:22 - berzcoin - DEBUG - Marked address as good: 127.0.0.1:18444
+2026-04-05 23:22:22 - berzcoin - INFO - Connected to 127.0.0.1:18444 (full-relay)
+2026-04-05 23:22:22 - berzcoin - DEBUG - RPC get_block_count completed in 0.01ms
+2026-04-05 23:22:22 - berzcoin - DEBUG - RPC get_balance completed in 0.01ms
+2026-04-05 23:22:23 - berzcoin - DEBUG - RPC get_block_count completed in 0.00ms
+2026-04-05 23:22:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:22:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:23:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:23:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:23:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:23:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:24:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:24:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:24:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:24:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:25:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:25:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:25:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:25:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:26:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:26:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:26:34 - berzcoin - DEBUG - Wallet saved: /home/berzat-babur/Desktop/bitcoin/BerzCoin/.runtime/interface-mainnet/wallets/1P1Fcvrr4vDEHCbnqVgwD4Jyp1CgZefSbS.json
+2026-04-05 23:26:34 - berzcoin - INFO - Wallet activated: 1P1Fcvrr4vDEHCbn... (key=123456...1234)
+Error handling request
+Traceback (most recent call last):
+  File "/home/berzat-babur/anaconda3/lib/python3.13/site-packages/aiohttp/web_protocol.py", line 480, in _handle_request
+    resp = await request_handler(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/berzat-babur/anaconda3/lib/python3.13/site-packages/aiohttp/web_app.py", line 569, in _handle
+    return await handler(request)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/berzat-babur/Desktop/bitcoin/BerzCoin/node/web/mining_wallet_dashboard.py", line 419, in set_mining_address
+    self.node.miner.mining_address = address
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'mining_address' and no __dict__ for setting new attributes
+Error handling request
+Traceback (most recent call last):
+  File "/home/berzat-babur/anaconda3/lib/python3.13/site-packages/aiohttp/web_protocol.py", line 480, in _handle_request
+    resp = await request_handler(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/berzat-babur/anaconda3/lib/python3.13/site-packages/aiohttp/web_app.py", line 569, in _handle
+    return await handler(request)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/berzat-babur/Desktop/bitcoin/BerzCoin/node/web/mining_wallet_dashboard.py", line 419, in set_mining_address
+    self.node.miner.mining_address = address
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'mining_address' and no __dict__ for setting new attributes
+Error handling request
+Traceback (most recent call last):
+  File "/home/berzat-babur/anaconda3/lib/python3.13/site-packages/aiohttp/web_protocol.py", line 480, in _handle_request
+    resp = await request_handler(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/berzat-babur/anaconda3/lib/python3.13/site-packages/aiohttp/web_app.py", line 569, in _handle
+    return await handler(request)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/berzat-babur/Desktop/bitcoin/BerzCoin/node/web/mining_wallet_dashboard.py", line 380, in start_mining
+    self.node.miner.mining_address = mining_address
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'mining_address' and no __dict__ for setting new attributes
+2026-04-05 23:26:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:26:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:27:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:27:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:27:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:27:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:28:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:28:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:28:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:28:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:29:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:29:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:29:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:29:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:30:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:30:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:30:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:30:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:31:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:31:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:31:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:31:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:32:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:32:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0

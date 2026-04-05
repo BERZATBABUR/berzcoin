@@ -6,6 +6,7 @@ import unittest
 from contextlib import contextmanager
 
 from node.chain.reorg import ReorgManager
+from tests.chaos.artifacts import write_json_artifact
 
 
 class _Header:
@@ -123,6 +124,8 @@ class TestFaultInjectionSoak(unittest.TestCase):
         iterations = int(os.getenv("BERZ_SOAK_ITERS", "400"))
         rng_seed = int(os.getenv("BERZ_SOAK_SEED", "1337"))
         random.seed(rng_seed)
+        ok_count = 0
+        fail_count = 0
 
         for i in range(iterations):
             entries = {}
@@ -156,8 +159,20 @@ class TestFaultInjectionSoak(unittest.TestCase):
             self.assertFalse(old_tip_main and new_tip_main)
             if ok:
                 self.assertTrue(new_tip_main)
+                ok_count += 1
             else:
                 self.assertTrue(utxo.db.rollbacks >= 1)
+                fail_count += 1
+
+        write_json_artifact(
+            "chaos/fault_injection_soak_summary.json",
+            {
+                "seed": rng_seed,
+                "iterations": iterations,
+                "ok_reorgs": ok_count,
+                "failed_reorgs": fail_count,
+            },
+        )
 
 
 if __name__ == "__main__":

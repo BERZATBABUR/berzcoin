@@ -6,6 +6,7 @@ from shared.core.transaction import Transaction
 from shared.consensus.params import ConsensusParams
 from shared.consensus.rules import ConsensusRules
 from shared.consensus.pow import ProofOfWork
+from shared.consensus.versionbits import VersionBitsTracker, get_standard_deployments
 from shared.utils.logging import get_logger
 from node.storage.db import Database
 from node.storage.blocks_store import BlocksStore
@@ -36,6 +37,12 @@ class ChainState:
         self.chainwork = ChainWork(params)
         self.rules = ConsensusRules(params, output_value_lookup=self._lookup_output_value)
         self.pow = ProofOfWork(params)
+        self.versionbits_tracker = VersionBitsTracker(get_standard_deployments(params))
+        # Expose dynamic versionbits state to consensus helpers that only receive params.
+        try:
+            setattr(self.params, "versionbits_tracker", self.versionbits_tracker)
+        except Exception:
+            pass
         self._block_validator = None
         
         self._best_hash: Optional[str] = None
@@ -69,6 +76,7 @@ class ChainState:
             entry = self.block_index.get_block(self._best_hash)
             if entry:
                 self._best_chainwork = entry.chainwork
+        self.refresh_versionbits_state()
         logger.info(f"Chain state initialized: height={self._best_height}, work={self._best_chainwork}")
 
     def _import_synthetic_genesis_for_regtest(self) -> None:
@@ -151,6 +159,7 @@ class ChainState:
         self._best_height = height
         self._best_chainwork = chainwork
         self.block_index.set_best_chain_tip(block_hash)
+        self.refresh_versionbits_state()
         logger.info(f"New best block: {block_hash[:16]} at height {height}")
         
         # Notify wallet of new block
@@ -261,3 +270,33 @@ class ChainState:
             'utxo_value': self.utxo_store.get_total_value(),
             'block_index_size': self.block_index.size()
         }
+
+    def refresh_versionbits_state(self) -> None:
+        """Recompute versionbits state from active-chain tip context."""
+        if self._best_height < 0 or self.versionbits_tracker is None:
+            return
+        tip_header = self.get_header(self._best_height)
+        if tip_header is None:
+            return
+        versions = self._get_recent_header_versions(self.versionbits_tracker.window_size)
+        self.versionbits_tracker.update_state(
+            height=int(self._best_height),
+            time=int(tip_header.timestamp),
+            versions=versions,
+        )
+
+    def _get_recent_header_versions(self, count: int) -> List[int]:
+        if count <= 0 or self._best_height < 0:
+            return []
+        start = max(0, int(self._best_height) - int(count) + 1)
+        versions: List[int] = []
+        for h in range(start, int(self._best_height) + 1):
+            header = self.get_header(h)
+            if header is not None:
+                versions.append(int(header.version))
+        return versions
+
+    def get_mining_block_version(self, base_version: int = 0x20000000) -> int:
+        """Return version for the next mined block with versionbits signaling."""
+        self.refresh_versionbits_state()
+        return int(self.versionbits_tracker.get_block_version(base_version))

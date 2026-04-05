@@ -3,6 +3,9 @@
 ## Goal
 Upgrade node binary/code with rollback safety.
 
+Concise operator summary:
+- `docs/V2_OPERATOR_UPGRADE_NOTE.md`
+
 ## Pre-upgrade
 1. Confirm current health/readiness are green.
 2. Snapshot datadir and wallet backups.

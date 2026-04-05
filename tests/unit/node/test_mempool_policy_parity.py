@@ -3,6 +3,7 @@
 import asyncio
 import unittest
 
+from shared.consensus.buried_deployments import HARDFORK_TX_V2
 from node.mempool.limits import MempoolLimits
 from node.mempool.pool import Mempool
 from node.mempool.policy import MempoolPolicy
@@ -14,9 +15,19 @@ from shared.script.sigchecks import SIGHASH_ALL, calculate_legacy_sighash
 
 
 class _ChainStateStub:
-    def __init__(self, utxos, known_txids):
+    def __init__(self, utxos, known_txids, best_height: int = 100, custom_activation_heights=None):
         self._utxos = utxos
         self._known = set(known_txids)
+        self.best_height = int(best_height)
+        self.params = type(
+            "Params",
+            (),
+            {
+                "coinbase_maturity": 100,
+                "max_money": 21_000_000 * 100_000_000,
+                "custom_activation_heights": dict(custom_activation_heights or {}),
+            },
+        )()
 
     def transaction_exists(self, txid: str) -> bool:
         return txid in self._known
@@ -25,7 +36,7 @@ class _ChainStateStub:
         return self._utxos.get((txid, index))
 
     def get_best_height(self) -> int:
-        return 100
+        return self.best_height
 
 
 def _p2pkh_script(pubkey_hash: bytes) -> bytes:
@@ -40,6 +51,59 @@ def _sign_input(tx: Transaction, i: int, key: PrivateKey, script_pubkey: bytes) 
 
 
 class TestMempoolPolicyParity(unittest.TestCase):
+    def test_mempool_rejects_v1_tx_when_hardfork_active_for_next_block(self) -> None:
+        async def run() -> None:
+            key = PrivateKey()
+            pub = key.public_key().to_bytes()
+            spk = _p2pkh_script(hash160(pub))
+            prev_txid = "ad" * 32
+            chainstate = _ChainStateStub(
+                {(prev_txid, 0): {"value": 100_000, "script_pubkey": spk}},
+                {prev_txid},
+                best_height=100,
+                custom_activation_heights={HARDFORK_TX_V2: 101},
+            )
+            mempool = Mempool(chainstate)
+
+            tx = Transaction(version=1)
+            tx.vin = [TxIn(prev_tx_hash=bytes.fromhex(prev_txid), prev_tx_index=0, sequence=0xFFFFFFFD)]
+            tx.vout = [TxOut(90_000, spk)]
+            _sign_input(tx, 0, key, spk)
+
+            self.assertFalse(await mempool.add_transaction(tx))
+            self.assertEqual(mempool.last_reject_reason, "consensus_tx_version_too_low")
+
+        asyncio.run(run())
+
+    def test_block_selection_skips_txs_invalid_under_newly_active_consensus(self) -> None:
+        async def run() -> None:
+            key = PrivateKey()
+            pub = key.public_key().to_bytes()
+            spk = _p2pkh_script(hash160(pub))
+            prev_txid = "ae" * 32
+            chainstate = _ChainStateStub(
+                {(prev_txid, 0): {"value": 100_000, "script_pubkey": spk}},
+                {prev_txid},
+                best_height=99,
+                custom_activation_heights={HARDFORK_TX_V2: 101},
+            )
+            mempool = Mempool(chainstate)
+
+            tx = Transaction(version=1)
+            tx.vin = [TxIn(prev_tx_hash=bytes.fromhex(prev_txid), prev_tx_index=0, sequence=0xFFFFFFFD)]
+            tx.vout = [TxOut(90_000, spk)]
+            _sign_input(tx, 0, key, spk)
+
+            # Added before activation (next block = 100).
+            self.assertTrue(await mempool.add_transaction(tx))
+
+            # Activation now applies to next block (height=101), so selection must skip it.
+            chainstate.best_height = 100
+            chosen = await mempool.get_transactions_for_block(max_weight=1_000_000)
+            self.assertEqual(chosen, [])
+
+        asyncio.run(run())
+
     def test_package_count_limit(self) -> None:
         async def run() -> None:
             limits = MempoolLimits(max_package_count=1)

@@ -33,6 +33,8 @@ class Peer:
         self.relay_txs: bool = True
         self.prefers_compact_blocks: bool = False
         self.compact_block_version: int = 0
+        self.compact_successes: int = 0
+        self.compact_failures: int = 0
         self.last_message_at: float = 0.0
 
     async def connect(self) -> bool:
@@ -171,6 +173,25 @@ class Peer:
 
     async def send_cmpctblock(self, message: CmpctBlockMessage) -> None:
         await self.send_message("cmpctblock", message.serialize())
+
+    async def send_getblocktxn(self, block_hash: bytes, indexes: List[int]) -> None:
+        msg = GetBlockTxnMessage(block_hash=block_hash, indexes=list(indexes))
+        await self.send_message("getblocktxn", msg.serialize())
+
+    async def send_blocktxn(self, block_hash: bytes, transactions: List[bytes]) -> None:
+        msg = BlockTxnMessage(block_hash=block_hash, transactions=list(transactions))
+        await self.send_message("blocktxn", msg.serialize())
+
+    def record_compact_result(self, success: bool) -> None:
+        if success:
+            self.compact_successes += 1
+            if self.compact_failures > 0:
+                self.compact_failures -= 1
+            return
+        self.compact_failures += 1
+        # Auto-downgrade peers repeatedly failing compact reconstruction.
+        if self.compact_failures >= 3 and self.compact_failures > (self.compact_successes * 2):
+            self.prefers_compact_blocks = False
 
     async def disconnect(self) -> None:
         was_connected = self.connected

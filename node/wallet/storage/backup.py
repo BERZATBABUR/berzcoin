@@ -1,18 +1,23 @@
 """Wallet backup functionality."""
 
+import base64
 import shutil
 import time
 import json
-import zipfile
 import hashlib
+import secrets
 from pathlib import Path
 from typing import List, Optional, Dict, Any
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from shared.utils.logging import get_logger
 
 logger = get_logger()
 
 class WalletBackup:
     """Wallet backup manager."""
+
+    BACKUP_ENCRYPTED_FORMAT = "berzcoin.backup.encrypted.v1"
+    BACKUP_ENCRYPTED_AAD = b"berzcoin.backup.v1"
     
     def __init__(self, wallet_path: str, backup_dir: Optional[str] = None):
         """Initialize wallet backup.
@@ -196,7 +201,13 @@ class WalletBackup:
             logger.error(f"Failed to delete backup: {e}")
             return False
     
-    def create_encrypted_backup(self, name: str, password: str) -> Optional[str]:
+    def create_encrypted_backup(
+        self,
+        name: str,
+        password: str,
+        network: Optional[str] = None,
+        compatibility: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         """Create encrypted backup.
         
         Args:
@@ -208,26 +219,67 @@ class WalletBackup:
         """
         if not self.wallet_path.exists():
             return None
-        
+
         try:
             backup_file = self.backup_dir / f"{name}.encrypted"
-            
-            # Create ZIP archive
-            with zipfile.ZipFile(backup_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-                zf.write(self.wallet_path, "wallet.dat")
-            
-            # In production, encrypt the ZIP file
-            # For now, just create ZIP
-            _ = password  # reserved for future encryption
-            
+
+            wallet_bytes = self.wallet_path.read_bytes()
+            wallet_sha256 = hashlib.sha256(wallet_bytes).hexdigest()
+            package = {
+                "metadata": {
+                    "name": name,
+                    "created_at": int(time.time()),
+                    "source": str(self.wallet_path),
+                    "size": len(wallet_bytes),
+                    "sha256": wallet_sha256,
+                    "network": network or "",
+                    "wallet_format": "berzcoin.wallet.v1",
+                    "compatibility": compatibility or {},
+                },
+                "wallet_b64": base64.b64encode(wallet_bytes).decode("ascii"),
+            }
+            plaintext = json.dumps(package, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+            salt = secrets.token_bytes(16)
+            nonce = secrets.token_bytes(12)
+            key = hashlib.scrypt(
+                str(password).encode("utf-8"),
+                salt=salt,
+                n=2**14,
+                r=8,
+                p=1,
+                dklen=32,
+            )
+            ciphertext = AESGCM(key).encrypt(nonce, plaintext, self.BACKUP_ENCRYPTED_AAD)
+            envelope = {
+                "format": self.BACKUP_ENCRYPTED_FORMAT,
+                "cipher": {"name": "aes-256-gcm", "nonce_b64": base64.b64encode(nonce).decode("ascii")},
+                "kdf": {
+                    "name": "scrypt",
+                    "salt_b64": base64.b64encode(salt).decode("ascii"),
+                    "n": 2**14,
+                    "r": 8,
+                    "p": 1,
+                    "dklen": 32,
+                },
+                "ciphertext_b64": base64.b64encode(ciphertext).decode("ascii"),
+            }
+            with open(backup_file, "w", encoding="utf-8") as f:
+                json.dump(envelope, f, indent=2)
+
             logger.info(f"Created encrypted backup: {backup_file}")
             return str(backup_file)
-            
+
         except Exception as e:
             logger.error(f"Failed to create encrypted backup: {e}")
             return None
-    
-    def restore_encrypted_backup(self, backup_name: str, password: str) -> bool:
+
+    def restore_encrypted_backup(
+        self,
+        backup_name: str,
+        password: str,
+        expected_network: Optional[str] = None,
+    ) -> bool:
         """Restore encrypted backup.
         
         Args:
@@ -238,27 +290,61 @@ class WalletBackup:
             True if restored
         """
         backup_file = self.backup_dir / f"{backup_name}.encrypted"
-        
+
         if not backup_file.exists():
             logger.error(f"Backup not found: {backup_file}")
             return False
-        
+
         try:
-            # In production, decrypt first
-            _ = password
-            with zipfile.ZipFile(backup_file, 'r') as zf:
-                zf.extractall(self.backup_dir)
-            
-            extracted_wallet = self.backup_dir / "wallet.dat"
-            if extracted_wallet.exists():
-                shutil.copy2(extracted_wallet, self.wallet_path)
-                extracted_wallet.unlink()
-                
-                logger.info(f"Restored encrypted backup: {backup_name}")
-                return True
-            
-            return False
-            
+            with open(backup_file, "r", encoding="utf-8") as f:
+                envelope = json.load(f)
+            if str(envelope.get("format", "")) != self.BACKUP_ENCRYPTED_FORMAT:
+                logger.error("Unsupported encrypted backup format")
+                return False
+
+            kdf = dict(envelope.get("kdf", {}))
+            cipher = dict(envelope.get("cipher", {}))
+            salt = base64.b64decode(str(kdf.get("salt_b64", "")))
+            nonce = base64.b64decode(str(cipher.get("nonce_b64", "")))
+            ciphertext = base64.b64decode(str(envelope.get("ciphertext_b64", "")))
+            key = hashlib.scrypt(
+                str(password).encode("utf-8"),
+                salt=salt,
+                n=int(kdf.get("n", 2**14)),
+                r=int(kdf.get("r", 8)),
+                p=int(kdf.get("p", 1)),
+                dklen=int(kdf.get("dklen", 32)),
+            )
+            plaintext = AESGCM(key).decrypt(nonce, ciphertext, self.BACKUP_ENCRYPTED_AAD)
+            package = json.loads(plaintext.decode("utf-8"))
+
+            metadata = dict(package.get("metadata", {}))
+            backup_network = str(metadata.get("network", "") or "")
+            if expected_network and backup_network and backup_network != expected_network:
+                logger.error(
+                    "Backup network mismatch: backup=%s expected=%s",
+                    backup_network,
+                    expected_network,
+                )
+                return False
+
+            wallet_bytes = base64.b64decode(str(package.get("wallet_b64", "")))
+            expected_sha = str(metadata.get("sha256", "") or "")
+            if expected_sha:
+                actual_sha = hashlib.sha256(wallet_bytes).hexdigest()
+                if actual_sha != expected_sha:
+                    logger.error("Encrypted backup checksum mismatch for %s", backup_name)
+                    return False
+
+            if self.wallet_path.exists():
+                current_backup = self.wallet_path.with_suffix('.bak')
+                shutil.copy2(self.wallet_path, current_backup)
+                logger.info(f"Created backup of current wallet: {current_backup}")
+
+            self.wallet_path.write_bytes(wallet_bytes)
+            logger.info(f"Restored encrypted backup: {backup_name}")
+            return True
+
         except Exception as e:
             logger.error(f"Failed to restore encrypted backup: {e}")
             return False

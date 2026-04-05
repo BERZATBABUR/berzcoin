@@ -1,6 +1,7 @@
 """Block synchronization logic."""
 
 import asyncio
+import time
 from typing import List, Optional, Set, Tuple, Dict
 from shared.core.block import Block, BlockHeader
 from shared.protocol.messages import *
@@ -39,6 +40,8 @@ class BlockSync:
         self.getdata_messages_sent = 0
         self._pending_block_requests: Dict[str, float] = {}
         self._block_request_timeout_secs = max(5, int(block_request_timeout_secs))
+        self._pending_compact_requests: Dict[str, Dict[str, object]] = {}
+        self._compact_request_timeout_secs = max(2, int(block_request_timeout_secs // 2))
 
     async def sync_from_peer(self, peer: Peer) -> bool:
         if self.syncing:
@@ -203,6 +206,7 @@ class BlockSync:
             "pending_blocks": len(self.pending_blocks),
             "download_queue": len(self.download_queue),
             "pending_block_requests": len(self._pending_block_requests),
+            "pending_compact_requests": len(self._pending_compact_requests),
         }
 
     def _cleanup_stale_requests(self) -> int:
@@ -211,3 +215,24 @@ class BlockSync:
         for h in stale:
             self._pending_block_requests.pop(h, None)
         return len(stale)
+
+    def register_compact_request(self, block_hash_hex: str, peer_addr: str, mode: str) -> None:
+        self._pending_compact_requests[str(block_hash_hex)] = {
+            "peer": str(peer_addr),
+            "mode": str(mode),
+            "created_at": time.monotonic(),
+        }
+
+    def resolve_compact_request(self, block_hash_hex: str) -> None:
+        self._pending_compact_requests.pop(str(block_hash_hex), None)
+
+    def get_stale_compact_requests(self) -> List[str]:
+        now = time.monotonic()
+        stale: List[str] = []
+        for block_hash_hex, meta in list(self._pending_compact_requests.items()):
+            created = float(meta.get("created_at", 0.0) or 0.0)
+            if now - created > self._compact_request_timeout_secs:
+                stale.append(block_hash_hex)
+        for block_hash_hex in stale:
+            self._pending_compact_requests.pop(block_hash_hex, None)
+        return stale

@@ -1,0 +1,62 @@
+name: Field Validation Weekly
+
+on:
+  schedule:
+    - cron: "15 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      min_weeks:
+        description: "Minimum consecutive weekly runs required (2-4)"
+        required: true
+        default: "2"
+      max_weeks:
+        description: "Maximum recent weekly runs to check"
+        required: true
+        default: "4"
+
+jobs:
+  stage-run:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [A, B, C]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+          pip install -e .
+
+      - name: Run field-validation stage
+        env:
+          FIELD_ARTIFACT_BASE: artifacts/field-validation
+        run: |
+          scripts/run_field_validation_stage.sh --stage "${{ matrix.stage }}"
+
+      - name: Assert weekly window SLOs hold
+        env:
+          MIN_WEEKS: ${{ github.event.inputs.min_weeks || '2' }}
+          MAX_WEEKS: ${{ github.event.inputs.max_weeks || '4' }}
+        run: |
+          python scripts/assert_field_validation_window.py \
+            --artifact-base artifacts/field-validation \
+            --stage "${{ matrix.stage }}" \
+            --min-runs "${MIN_WEEKS}" \
+            --max-runs "${MAX_WEEKS}"
+
+      - name: Upload field-validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: field-validation-${{ matrix.stage }}-${{ github.run_id }}
+          path: artifacts/field-validation/${{ matrix.stage }}
+          retention-days: 30

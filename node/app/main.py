@@ -2,15 +2,19 @@
 
 import argparse
 import asyncio
+import hashlib
 import ipaddress
+import json
 import signal
 import sys
 import time
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, List
 
 from shared.utils.logging import get_logger, setup_logging
 from node.chain.chainstate import ChainState
 from node.mempool.pool import Mempool
+from node.mempool.limits import MempoolLimits
+from node.mempool.policy import MempoolPolicy
 from node.mining.miner import MiningNode
 from node.p2p.addrman import AddrMan
 from node.p2p.connman import ConnectionManager
@@ -25,6 +29,7 @@ from node.rpc.handlers.wallet_control import WalletControlHandlers
 from node.rpc.server import RPCServer
 from node.storage.blocks_store import BlocksStore
 from node.storage.db import Database
+from node.storage.mempool_store import MempoolStore
 from node.storage.migrations import Migrations, register_standard_migrations
 from node.storage.utxo_store import UTXOStore
 from shared.core.transaction import Transaction
@@ -41,7 +46,11 @@ from shared.protocol.messages import (
     PongMessage,
     SendCmpctMessage,
     CmpctBlockMessage,
+    GetBlockTxnMessage,
+    BlockTxnMessage,
+    compact_shortid,
 )
+from shared.consensus.buried_deployments import HARDFORK_TX_V2
 from node.p2p.orphanage import Orphanage
 from node.wallet.simple_wallet import SimpleWalletManager
 from .health import HealthChecker
@@ -68,6 +77,7 @@ class BerzCoinNode:
         self.chainstate: Optional[ChainState] = None
         self.connman: Optional[ConnectionManager] = None
         self.mempool: Optional[Mempool] = None
+        self.mempool_store: Optional[MempoolStore] = None
         self.simple_wallet_manager: Optional[SimpleWalletManager] = None
         self.miner: Optional[MiningNode] = None
         self.rpc_server: Optional[RPCServer] = None
@@ -83,6 +93,10 @@ class BerzCoinNode:
         self._known_blocks: set[str] = set()
         self._peer_msg_window: Dict[str, tuple[float, int]] = {}
         self._max_msgs_per_sec = int(self.config.get("p2p_max_msgs_per_sec", 300))
+        self._pending_compact_blocks: Dict[str, Dict[str, Any]] = {}
+        self._compact_max_missing_indexes = int(
+            self.config.get("compact_max_missing_indexes", 32)
+        )
 
         self.running = False
         self.sync_task: Optional[asyncio.Task] = None
@@ -105,6 +119,8 @@ class BerzCoinNode:
             return False
         if not await self._init_chainstate():
             return False
+        if not self._hardfork_guardrails_ok():
+            return False
         if not await self._init_mempool():
             return False
         if not await self._init_p2p():
@@ -119,6 +135,39 @@ class BerzCoinNode:
         self.metrics_collector = MetricsCollector(self)
 
         logger.info("Node initialized successfully")
+        return True
+
+    def _hardfork_guardrails_ok(self) -> bool:
+        """Refuse startup if node consensus version is below active hard-fork requirement."""
+        if not bool(self.config.get("enforce_hardfork_guardrails", True)):
+            return True
+        if self.chainstate is None:
+            return True
+
+        params = getattr(self.chainstate, "params", None)
+        if params is None:
+            return True
+
+        custom = getattr(params, "custom_activation_heights", {}) or {}
+        activation_height = custom.get(HARDFORK_TX_V2)
+        if activation_height is None:
+            return True
+
+        # First hard-fork profile currently requires consensus version 2.
+        required_consensus_version = 2
+        node_consensus_version = int(self.config.get("node_consensus_version", 1))
+        tip_height = int(self.chainstate.get_best_height())
+
+        if tip_height >= int(activation_height) and node_consensus_version < required_consensus_version:
+            logger.error(
+                "Startup blocked by hard-fork guardrail: tip=%s activation=%s "
+                "requires node_consensus_version>=%s (current=%s)",
+                tip_height,
+                activation_height,
+                required_consensus_version,
+                node_consensus_version,
+            )
+            return False
         return True
 
     async def start(self) -> None:
@@ -183,6 +232,8 @@ class BerzCoinNode:
 
         if self.connman:
             await self.connman.stop()
+
+        self._flush_mempool_to_disk()
 
         if self.db:
             self.db.disconnect()
@@ -358,6 +409,84 @@ class BerzCoinNode:
         if len(self._known_blocks) > 50_000:
             self._known_blocks.clear()
 
+    def _build_compact_candidate(
+        self, cmpct_msg: CmpctBlockMessage
+    ) -> tuple[Dict[int, bytes], List[int], int]:
+        prefilled: Dict[int, bytes] = {
+            int(index): bytes(tx_bytes)
+            for index, tx_bytes in list(cmpct_msg.prefilled_txn or [])
+        }
+        total_txs = len(cmpct_msg.shortids) + len(prefilled)
+        if total_txs <= 0:
+            return {}, [], 0
+        remaining_indexes = [i for i in range(total_txs) if i not in prefilled]
+        if len(remaining_indexes) != len(cmpct_msg.shortids):
+            return {}, list(range(total_txs)), total_txs
+
+        tx_slots: Dict[int, bytes] = dict(prefilled)
+        shortid_map: Dict[int, Optional[bytes]] = {}
+        mempool_txs = getattr(self.mempool, "transactions", {}) if self.mempool else {}
+        for entry in mempool_txs.values():
+            tx = getattr(entry, "tx", None)
+            if tx is None:
+                continue
+            sid = compact_shortid(cmpct_msg.header, cmpct_msg.nonce, tx.txid())
+            tx_bytes = tx.serialize()
+            if sid in shortid_map and shortid_map[sid] != tx_bytes:
+                shortid_map[sid] = None
+            elif sid not in shortid_map:
+                shortid_map[sid] = tx_bytes
+
+        missing: List[int] = []
+        for pos, shortid in enumerate(cmpct_msg.shortids):
+            index = remaining_indexes[pos]
+            tx_bytes = shortid_map.get(int(shortid))
+            if tx_bytes is None:
+                missing.append(index)
+                continue
+            tx_slots[index] = bytes(tx_bytes)
+        return tx_slots, missing, total_txs
+
+    def _finalize_compact_block(
+        self, header: bytes, tx_slots: Dict[int, bytes], total_txs: int
+    ) -> Optional[Block]:
+        if total_txs <= 0:
+            return None
+        if any(i not in tx_slots for i in range(total_txs)):
+            return None
+        payload = bytearray(header)
+        from shared.core.serialization import Serializer as _S
+
+        payload.extend(_S.write_varint(total_txs))
+        for i in range(total_txs):
+            payload.extend(tx_slots[i])
+        try:
+            block, _ = Block.deserialize(bytes(payload))
+            return block
+        except Exception:
+            return None
+
+    async def _request_full_block_fallback(self, peer, block_hash: bytes) -> None:
+        try:
+            await peer.send_getdata(InvMessage.InvType.MSG_BLOCK, block_hash)
+        except Exception:
+            pass
+
+    async def _handle_stale_compact_requests(self) -> None:
+        if self.block_sync is None or self.connman is None:
+            return
+        stale = self.block_sync.get_stale_compact_requests()
+        for block_hash_hex in stale:
+            pending = self._pending_compact_blocks.get(block_hash_hex)
+            if not pending:
+                continue
+            peer_addr = str(pending.get("peer_addr", ""))
+            peer = self.connman.get_peer(peer_addr) if peer_addr else None
+            block_hash = pending.get("block_hash")
+            if peer is not None and isinstance(block_hash, (bytes, bytearray)):
+                await self._request_full_block_fallback(peer, bytes(block_hash))
+                peer.record_compact_result(False)
+
     def _peer_rate_limited(self, peer_addr: str) -> bool:
         now = asyncio.get_event_loop().time()
         window_start, count = self._peer_msg_window.get(peer_addr, (now, 0))
@@ -427,6 +556,12 @@ class BerzCoinNode:
 
     async def _on_p2p_message(self, peer, command: str, payload: bytes) -> None:
         """Handle inbound P2P messages with validation-first relay behavior."""
+        if self.connman and self.connman.peer_scores.is_banned(peer.address):
+            try:
+                await peer.disconnect()
+            except Exception:
+                pass
+            return
         if self._peer_rate_limited(peer.address):
             if self.connman:
                 self.connman.peer_scores.record_bad(peer.address, "msg_rate_limit")
@@ -546,6 +681,9 @@ class BerzCoinNode:
                 blk_msg, _ = BlockMessage.deserialize(payload)
                 block, _ = Block.deserialize(blk_msg.block)
                 block_hash = block.header.hash_hex()
+                if self.block_sync is not None:
+                    self.block_sync.resolve_compact_request(block_hash)
+                self._pending_compact_blocks.pop(block_hash, None)
                 if block_hash in self._known_blocks:
                     return
                 accepted, _, _reason = await self.on_block(
@@ -560,12 +698,110 @@ class BerzCoinNode:
                 compact_block_hash = cmpct_msg.block_hash()
                 block_hash_hex = compact_block_hash[::-1].hex()
                 if block_hash_hex in self._known_blocks:
+                    peer.record_compact_result(True)
                     return
                 if self.chainstate and self.chainstate.block_index.get_block(block_hash_hex):
                     self._remember_known_block(block_hash_hex)
+                    peer.record_compact_result(True)
                     return
-                # Fallback pipeline: request full block for strict validation path.
-                await peer.send_getdata(InvMessage.InvType.MSG_BLOCK, compact_block_hash)
+                await self._ensure_block_sync()
+                tx_slots, missing_indexes, total_txs = self._build_compact_candidate(cmpct_msg)
+                if total_txs > 0 and not missing_indexes:
+                    block = self._finalize_compact_block(
+                        cmpct_msg.header, tx_slots, total_txs
+                    )
+                    if block is not None:
+                        accepted, _, _reason = await self.on_block(
+                            block, source_peer=peer.address, relay=True
+                        )
+                        if accepted:
+                            self._remember_known_block(block_hash_hex)
+                            peer.record_compact_result(True)
+                            self.block_sync.resolve_compact_request(block_hash_hex)
+                            self._pending_compact_blocks.pop(block_hash_hex, None)
+                            return
+
+                self._pending_compact_blocks[block_hash_hex] = {
+                    "peer_addr": peer.address,
+                    "block_hash": compact_block_hash,
+                    "header": cmpct_msg.header,
+                    "nonce": int(cmpct_msg.nonce),
+                    "tx_slots": tx_slots,
+                    "total_txs": int(total_txs),
+                    "missing_indexes": list(missing_indexes),
+                    "requested_indexes": list(missing_indexes),
+                    "created_at": asyncio.get_event_loop().time(),
+                }
+                if missing_indexes and len(missing_indexes) <= self._compact_max_missing_indexes:
+                    self.block_sync.register_compact_request(
+                        block_hash_hex, peer.address, "getblocktxn"
+                    )
+                    await peer.send_getblocktxn(compact_block_hash, missing_indexes)
+                    return
+
+                # Too many unknown transactions: fallback directly to full block.
+                self.block_sync.register_compact_request(
+                    block_hash_hex, peer.address, "getdata"
+                )
+                peer.record_compact_result(False)
+                await self._request_full_block_fallback(peer, compact_block_hash)
+                return
+
+            if command == "getblocktxn":
+                if not self.chainstate:
+                    return
+                req, _ = GetBlockTxnMessage.deserialize(payload)
+                block_hash_hex = req.block_hash[::-1].hex()
+                block = self.chainstate.get_block(block_hash_hex)
+                if not block:
+                    return
+                txs: List[bytes] = []
+                for idx in req.indexes:
+                    i = int(idx)
+                    if 0 <= i < len(block.transactions):
+                        txs.append(block.transactions[i].serialize())
+                await peer.send_blocktxn(req.block_hash, txs)
+                return
+
+            if command == "blocktxn":
+                msg, _ = BlockTxnMessage.deserialize(payload)
+                block_hash_hex = msg.block_hash[::-1].hex()
+                pending = self._pending_compact_blocks.get(block_hash_hex)
+                if not pending:
+                    return
+                requested = list(pending.get("requested_indexes", []) or [])
+                if len(requested) != len(msg.transactions):
+                    self.block_sync.register_compact_request(
+                        block_hash_hex, peer.address, "getdata"
+                    )
+                    peer.record_compact_result(False)
+                    await self._request_full_block_fallback(peer, msg.block_hash)
+                    return
+                tx_slots = dict(pending.get("tx_slots", {}))
+                for index, tx_bytes in zip(requested, msg.transactions):
+                    tx_slots[int(index)] = bytes(tx_bytes)
+                block = self._finalize_compact_block(
+                    bytes(pending.get("header", b"")),
+                    tx_slots,
+                    int(pending.get("total_txs", 0)),
+                )
+                if block is None:
+                    self.block_sync.register_compact_request(
+                        block_hash_hex, peer.address, "getdata"
+                    )
+                    peer.record_compact_result(False)
+                    await self._request_full_block_fallback(peer, msg.block_hash)
+                    return
+                accepted, _, _reason = await self.on_block(
+                    block, source_peer=peer.address, relay=True
+                )
+                self.block_sync.resolve_compact_request(block_hash_hex)
+                self._pending_compact_blocks.pop(block_hash_hex, None)
+                if accepted:
+                    self._remember_known_block(block_hash_hex)
+                    peer.record_compact_result(True)
+                    return
+                peer.record_compact_result(False)
                 return
 
             if command == "getdata":
@@ -689,6 +925,8 @@ class BerzCoinNode:
                                 )
                             await self.block_sync.sync_from_peer(best_peer)
 
+                await self._handle_stale_compact_requests()
+
                 await asyncio.sleep(max(1, int(self.config.get("sync_poll_interval_secs", 30))))
 
             except asyncio.CancelledError:
@@ -740,11 +978,146 @@ class BerzCoinNode:
         """Initialize mempool."""
         if self.mode_manager.is_light_node():
             self.mempool = None
+            self.mempool_store = None
             return True
         # Ensure chainstate available for mempool
         assert self.chainstate is not None
-        self.mempool = Mempool(self.chainstate)
+        policy = MempoolPolicy()
+        relay_fee = self.config.get("mempool_min_relay_fee", None)
+        if relay_fee is None:
+            # Compatibility path: mempoolminfee is sat/kvB-like.
+            relay_fee = max(1, int(self.config.get("mempoolminfee", 1000)) // 1000)
+        policy.set_min_relay_fee(max(1, int(relay_fee)))
+
+        limits = MempoolLimits(
+            max_size=int(self.config.get("mempool_max_size_bytes", 300_000_000)),
+            max_weight=int(self.config.get("mempool_max_weight", 1_500_000_000)),
+            max_transactions=int(self.config.get("mempool_max_transactions", 50_000)),
+            max_ancestors=int(self.config.get("mempool_max_ancestors", 25)),
+            max_descendants=int(self.config.get("mempool_max_descendants", 25)),
+            max_ancestor_size_vbytes=int(self.config.get("mempool_max_ancestor_size_vbytes", 101_000)),
+            max_descendant_size_vbytes=int(self.config.get("mempool_max_descendant_size_vbytes", 101_000)),
+            max_package_count=int(self.config.get("mempool_max_package_count", 25)),
+            max_package_weight=int(self.config.get("mempool_max_package_weight", 404_000)),
+        )
+        self.mempool = Mempool(self.chainstate, policy=policy, limits=limits)
+        self.mempool._min_fee_floor_half_life_secs = float(
+            self.config.get("mempool_rolling_floor_halflife_secs", 600)
+        )
+        self.mempool_store = MempoolStore(self.config.get_datadir())
+        if bool(self.config.get("persistmempool", True)):
+            await self._restore_mempool_from_disk()
         return True
+
+    def _mempool_rules_fingerprint(self) -> str:
+        """Compact fingerprint of rule context used for mempool admission."""
+        custom_heights: Dict[str, int] = {}
+        coinbase_maturity = 100
+        if self.chainstate is not None:
+            params = getattr(self.chainstate, "params", None)
+            custom_heights = dict(getattr(params, "custom_activation_heights", {}) or {})
+            coinbase_maturity = int(getattr(params, "coinbase_maturity", 100))
+        payload = {
+            "network": str(self.config.get("network", "mainnet")),
+            "node_consensus_version": int(self.config.get("node_consensus_version", 1)),
+            "coinbase_maturity": int(coinbase_maturity),
+            "custom_activation_heights": {k: int(v) for k, v in sorted(custom_heights.items())},
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    async def _restore_mempool_from_disk(self) -> None:
+        """Restore mempool snapshot and revalidate all entries against current chain/rules."""
+        if self.mempool is None or self.mempool_store is None or self.chainstate is None:
+            return
+        snapshot = self.mempool_store.load_snapshot()
+        if not snapshot:
+            return
+        metadata = snapshot.get("metadata", {}) if isinstance(snapshot, dict) else {}
+        entries = snapshot.get("entries", []) if isinstance(snapshot, dict) else []
+        if not isinstance(entries, list):
+            logger.warning("Ignoring mempool snapshot: malformed entries list")
+            return
+
+        snap_network = str(metadata.get("network", ""))
+        if snap_network and snap_network != self.network:
+            logger.warning(
+                "Ignoring mempool snapshot from wrong network: snapshot=%s current=%s",
+                snap_network,
+                self.network,
+            )
+            return
+
+        tip_hash = str(self.chainstate.get_best_block_hash() or "")
+        tip_height = int(self.chainstate.get_best_height())
+        if (
+            str(metadata.get("tip_hash", "")) != tip_hash
+            or int(metadata.get("tip_height", -1)) != tip_height
+        ):
+            logger.info(
+                "Mempool snapshot tip mismatch (snapshot=%s@%s current=%s@%s); full revalidation on restore",
+                str(metadata.get("tip_hash", ""))[:16],
+                int(metadata.get("tip_height", -1)),
+                tip_hash[:16],
+                tip_height,
+            )
+
+        expected_rules = self._mempool_rules_fingerprint()
+        snapshot_rules = str(metadata.get("rules_fingerprint", ""))
+        if snapshot_rules and snapshot_rules != expected_rules:
+            logger.info("Mempool snapshot rules fingerprint mismatch; strict revalidation enabled")
+
+        restored = 0
+        dropped: Dict[str, int] = {}
+        for tx_data in sorted(
+            entries,
+            key=lambda e: (
+                int(e.get("height_added", -1)),
+                float(e.get("time_added", 0.0)),
+                str(e.get("txid", "")),
+            ),
+        ):
+            tx_hex = str(tx_data.get("transaction", "")).strip()
+            txid = str(tx_data.get("txid", ""))[:16]
+            if not tx_hex:
+                dropped["missing_tx_data"] = dropped.get("missing_tx_data", 0) + 1
+                continue
+            try:
+                tx, _ = Transaction.deserialize(bytes.fromhex(tx_hex))
+            except Exception:
+                dropped["malformed_tx"] = dropped.get("malformed_tx", 0) + 1
+                continue
+            accepted = await self.mempool.add_transaction(tx, source_peer="mempool_restore")
+            if accepted:
+                restored += 1
+            else:
+                reason = self.mempool.last_reject_reason or "restore_rejected"
+                dropped[reason] = dropped.get(reason, 0) + 1
+                logger.debug("Dropped restored tx %s (%s)", txid, reason)
+
+        logger.info(
+            "Mempool restore complete: restored=%s dropped=%s",
+            restored,
+            dict(sorted(dropped.items())),
+        )
+
+    def _flush_mempool_to_disk(self) -> None:
+        if (
+            self.mempool is None
+            or self.mempool_store is None
+            or self.chainstate is None
+            or not bool(self.config.get("persistmempool", True))
+        ):
+            return
+        ok = self.mempool_store.save(
+            dict(self.mempool.transactions),
+            network=self.network,
+            tip_hash=self.chainstate.get_best_block_hash(),
+            tip_height=int(self.chainstate.get_best_height()),
+            rules_fingerprint=self._mempool_rules_fingerprint(),
+        )
+        if not ok:
+            logger.warning("Failed to persist mempool snapshot on shutdown")
 
     async def _init_p2p(self) -> bool:
         """Initialize P2P network."""
@@ -753,14 +1126,31 @@ class BerzCoinNode:
             logger.warning("Light node mode is disabled; initializing full P2P stack")
             self.config.set("lightwallet", False)
 
-        addrman = AddrMan()
+        addrman = AddrMan(data_dir=self.config.get_datadir())
         connect_only = self.config.is_connect_only()
         dns_seeds = None
+        discovery_sources = self.config.get_peer_discovery_sources()
+        if self.network != "regtest" and not self.config.get("allow_missing_bootstrap", False):
+            if not any(bool(v) for v in discovery_sources.values()):
+                logger.error(
+                    "Startup refused: no viable peer discovery source for %s. "
+                    "Configure connect/addnode/bootstrap_file/dnsseed or set allow_missing_bootstrap=true.",
+                    self.network,
+                )
+                return False
         if self.config.get("dnsseed"):
-            configured_seeds = self.config.get("dnsseeds", []) or []
-            dns_seeds = DNSSeeds(seeds=list(configured_seeds))
-            if not configured_seeds:
-                logger.warning("dnsseed enabled but dnsseeds list is empty")
+            seed_hosts = self.config.get_dns_seed_hosts()
+            dns_seeds = DNSSeeds(seeds=list(seed_hosts), network=self.network)
+            if not seed_hosts and self.network != "regtest":
+                logger.warning("dnsseed enabled but no seed hosts available for %s", self.network)
+
+        logger.info(
+            "Peer discovery sources priority: connect=%s addnode=%s bootstrap=%s dns=%s",
+            len(discovery_sources.get("connect", [])),
+            len(discovery_sources.get("addnode", [])),
+            len(discovery_sources.get("bootstrap_file", [])),
+            len(discovery_sources.get("dns_seeds", [])),
+        )
 
         self.connman = ConnectionManager(
             addrman=addrman,
@@ -771,10 +1161,37 @@ class BerzCoinNode:
             connect_only=connect_only,
         )
         self.connman.on_message = self._on_p2p_message
+        self.connman.peer_scores.configure_persistence(self.config.get_datadir())
         if self.mempool is not None:
             self.mempool.connman = self.connman
 
         return True
+
+    async def list_banned(self) -> list:
+        if not self.connman:
+            return []
+        return self.connman.peer_scores.list_banned()
+
+    async def set_ban(
+        self,
+        address: str,
+        action: str = "add",
+        bantime: int = 86400,
+        reason: str = "manual",
+    ) -> Dict[str, object]:
+        if not self.connman:
+            return {"error": "P2P unavailable"}
+        return self.connman.peer_scores.set_ban(
+            address=address,
+            action=action,
+            bantime=int(bantime),
+            reason=str(reason or "manual"),
+        )
+
+    async def clear_banned(self) -> Dict[str, object]:
+        if not self.connman:
+            return {"error": "P2P unavailable"}
+        return self.connman.peer_scores.clear_banned()
 
     async def _init_wallet(self) -> bool:
         """Initialize canonical simple private-key wallet manager."""
@@ -879,6 +1296,9 @@ class BerzCoinNode:
             "get_health": control.get_health,
             "get_readiness": control.get_readiness,
             "get_metrics": control.get_metrics,
+            "listbanned": self.list_banned,
+            "setban": self.set_ban,
+            "clearbanned": self.clear_banned,
 
             # Blockchain
             "get_blockchain_info": blockchain.get_blockchain_info,
@@ -888,6 +1308,7 @@ class BerzCoinNode:
 
             # Mempool
             "get_mempool_info": mempool.get_mempool_info,
+            "get_mempool_diagnostics": mempool.get_mempool_diagnostics,
             "get_raw_mempool": mempool.get_raw_mempool,
             "send_raw_transaction": mempool.send_raw_transaction,
             "submit_package": mempool.submit_package,
@@ -897,10 +1318,17 @@ class BerzCoinNode:
             "get_balance": wallet.get_balance,
             "get_new_address": wallet.get_new_address,
             "send_to_address": wallet.send_to_address,
+            "importxpubwatchonly": wallet.import_xpub_watchonly,
+            "walletcreatefundedpsbt": wallet.wallet_create_funded_psbt,
+            "walletprocesspsbt": wallet.wallet_process_psbt,
+            "finalizepsbt": wallet.finalize_psbt,
+            "createmultisigpolicy": wallet.create_multisig_policy,
             "createwallet": w_ctrl.create_wallet,
             "loadwallet": w_ctrl.load_wallet,
             "listwallets": w_ctrl.list_wallets,
             "activatewallet": w_ctrl.activate_wallet,
+            "walletpassphrase": w_ctrl.wallet_passphrase,
+            "walletlock": w_ctrl.wallet_lock,
 
             # Mining
             "get_mining_info": mining.get_mining_info,
@@ -971,6 +1399,13 @@ async def _amain() -> None:
         "--wallet-private-key",
         help="Activate wallet with private key",
     )
+    parser.add_argument(
+        "--activation-height",
+        action="append",
+        default=[],
+        metavar="NAME=HEIGHT",
+        help="Override consensus activation height (repeatable)",
+    )
 
     args = parser.parse_args()
 
@@ -984,6 +1419,16 @@ async def _amain() -> None:
         node.config.set("network", "testnet")
     if args.wallet_private_key:
         node.config.set("wallet_private_key", args.wallet_private_key)
+    if args.activation_height:
+        try:
+            cli_overrides = Config.parse_activation_height_items(args.activation_height)
+        except ValueError as e:
+            parser.error(str(e))
+        merged = Config.parse_activation_height_items(
+            node.config.get("custom_activation_heights", {})
+        )
+        merged.update(cli_overrides)
+        node.config.set("custom_activation_heights", merged)
 
     if not await node.initialize():
         sys.exit(1)

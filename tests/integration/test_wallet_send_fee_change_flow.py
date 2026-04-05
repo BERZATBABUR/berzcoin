@@ -27,9 +27,10 @@ class _Config:
 
 
 class _ChainState:
-    def __init__(self, sender_address: str):
+    def __init__(self, sender_address: str, utxo_value: int = 200_000):
         self.sender_address = sender_address
         self._spk = TransactionBuilder("regtest")._create_script_pubkey(sender_address)
+        self._utxo_value = int(utxo_value)
 
     @staticmethod
     def get_balance(_address: str) -> int:
@@ -42,7 +43,7 @@ class _ChainState:
             {
                 "txid": "11" * 32,
                 "index": 0,
-                "value": 200_000,
+                "value": self._utxo_value,
                 "height": 1,
             }
         ]
@@ -52,7 +53,7 @@ class _ChainState:
             return {
                 "txid": txid,
                 "index": index,
-                "value": 200_000,
+                "value": self._utxo_value,
                 "script_pubkey": self._spk,
                 "height": 1,
                 "is_coinbase": False,
@@ -70,9 +71,9 @@ class _Mempool:
 
 
 class _Node:
-    def __init__(self, datadir: Path, sender_address: str):
+    def __init__(self, datadir: Path, sender_address: str, utxo_value: int = 200_000):
         self.config = _Config(datadir)
-        self.chainstate = _ChainState(sender_address)
+        self.chainstate = _ChainState(sender_address, utxo_value=utxo_value)
         self.mempool = _Mempool()
         self.simple_wallet_manager = None
 
@@ -89,7 +90,7 @@ class TestWalletSendFlow(unittest.TestCase):
                 node.simple_wallet_manager = manager
                 handlers = WalletHandlers(node)
 
-                recipient = public_key_to_address(PrivateKey().public_key())
+                recipient = public_key_to_address(PrivateKey().public_key(), network="regtest")
                 txid = await handlers.send_to_address(recipient, 0.001)
                 self.assertTrue(txid)
 
@@ -107,6 +108,49 @@ class TestWalletSendFlow(unittest.TestCase):
                 for txin in tx.vin:
                     self.assertTrue(txin.script_sig)
                     self.assertGreater(len(txin.script_sig), 35)
+
+        asyncio.run(run())
+
+    def test_send_rejects_address_network_mismatch(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                manager = SimpleWalletManager(Path(tmp))
+                wallet = manager.create_wallet()
+                manager.activate_wallet(wallet.private_key_hex)
+
+                node = _Node(Path(tmp), wallet.address)
+                node.simple_wallet_manager = manager
+                handlers = WalletHandlers(node)
+
+                # mainnet destination while wallet/node are regtest.
+                bad_recipient = public_key_to_address(PrivateKey().public_key(), network="mainnet")
+                with self.assertRaises(ValueError):
+                    await handlers.send_to_address(bad_recipient, 0.001)
+
+        asyncio.run(run())
+
+    def test_send_absorbs_dust_change_into_fee(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                manager = SimpleWalletManager(Path(tmp))
+                wallet = manager.create_wallet()
+                manager.activate_wallet(wallet.private_key_hex)
+
+                # 100000 send + 194 baseline fee => 406 sat pre-change (dust) with 100600 input.
+                node = _Node(Path(tmp), wallet.address, utxo_value=100_600)
+                node.simple_wallet_manager = manager
+                handlers = WalletHandlers(node)
+
+                recipient = public_key_to_address(PrivateKey().public_key(), network="regtest")
+                txid = await handlers.send_to_address(recipient, 0.001)
+                self.assertTrue(txid)
+                tx = node.mempool.last_tx
+                self.assertIsNotNone(tx)
+                # No dust change output should be created.
+                self.assertEqual(len(tx.vout), 1)
+                self.assertEqual(tx.vout[0].value, 100_000)
+                # Entire remainder goes to fee.
+                self.assertEqual(100_600 - sum(o.value for o in tx.vout), 600)
 
         asyncio.run(run())
 

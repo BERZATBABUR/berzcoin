@@ -123,6 +123,11 @@ class MetricsCollector:
         mempool = getattr(self.node, "mempool", None)
         mempool_size = len(mempool.transactions) if mempool else 0
         mempool_weight = self._safe_int(getattr(mempool, "total_weight", 0), 0) if mempool else 0
+        mempool_policy = {
+            "min_fee_floor_rate": float(getattr(mempool, "min_fee_floor_rate", 0.0)) if mempool else 0.0,
+            "reject_reason_counts": dict(getattr(mempool, "reject_reason_counts", {})) if mempool else {},
+            "eviction_reason_counts": dict(getattr(mempool, "eviction_reason_counts", {})) if mempool else {},
+        }
         utxo = self._utxo_stats()
 
         return {
@@ -133,12 +138,14 @@ class MetricsCollector:
                 "peers": peer_count,
                 "mempool_size": mempool_size,
                 "mempool_weight": mempool_weight,
+                "mempool_min_fee_floor_rate": float(mempool_policy["min_fee_floor_rate"]),
                 "blocks_processed": self.blocks_processed,
                 "txs_processed": self.txs_processed,
                 "sync_lag_blocks": self._sync_lag(),
                 "pending_block_requests": self._sync_pending_requests(),
                 "orphan_blocks": self._orphan_blocks(),
             },
+            "mempool_policy": mempool_policy,
             "chainstate": {
                 "utxo_count": utxo["count"],
                 "utxo_total_value": utxo["total_value"],
@@ -172,6 +179,9 @@ class MetricsCollector:
             "# HELP berzcoin_mempool_weight Mempool weight in weight units",
             "# TYPE berzcoin_mempool_weight gauge",
             f"berzcoin_mempool_weight {int(metrics['node']['mempool_weight'])}",
+            "# HELP berzcoin_mempool_min_fee_floor_rate Current mempool min fee floor in sat/vB",
+            "# TYPE berzcoin_mempool_min_fee_floor_rate gauge",
+            f"berzcoin_mempool_min_fee_floor_rate {float(metrics['node']['mempool_min_fee_floor_rate']):.8f}",
             "# HELP berzcoin_sync_lag_blocks Best peer minus local height",
             "# TYPE berzcoin_sync_lag_blocks gauge",
             f"berzcoin_sync_lag_blocks {int(metrics['node']['sync_lag_blocks'])}",
@@ -203,6 +213,32 @@ class MetricsCollector:
             "# TYPE berzcoin_txs_processed_total counter",
             f"berzcoin_txs_processed_total {int(metrics['node']['txs_processed'])}",
         ]
+        reject_counts = metrics.get("mempool_policy", {}).get("reject_reason_counts", {}) or {}
+        if reject_counts:
+            lines.extend(
+                [
+                    "# HELP berzcoin_mempool_reject_reason_total Count of mempool rejections by reason",
+                    "# TYPE berzcoin_mempool_reject_reason_total counter",
+                ]
+            )
+            for reason, count in sorted(reject_counts.items()):
+                safe_reason = str(reason).replace("\\", "_").replace('"', "_")
+                lines.append(
+                    f'berzcoin_mempool_reject_reason_total{{reason="{safe_reason}"}} {int(count)}'
+                )
+        eviction_counts = metrics.get("mempool_policy", {}).get("eviction_reason_counts", {}) or {}
+        if eviction_counts:
+            lines.extend(
+                [
+                    "# HELP berzcoin_mempool_eviction_reason_total Count of mempool evictions by reason",
+                    "# TYPE berzcoin_mempool_eviction_reason_total counter",
+                ]
+            )
+            for reason, count in sorted(eviction_counts.items()):
+                safe_reason = str(reason).replace("\\", "_").replace('"', "_")
+                lines.append(
+                    f'berzcoin_mempool_eviction_reason_total{{reason="{safe_reason}"}} {int(count)}'
+                )
         return "\n".join(lines) + "\n"
 
     def record_block(self, block: Any) -> None:

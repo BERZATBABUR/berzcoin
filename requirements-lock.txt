@@ -1,0 +1,17 @@
+# BerzCoin v2 RC reproducibility lock file
+# Generated/maintained for deterministic CI + release builds.
+
+aiohttp==3.11.10
+cryptography==44.0.1
+pytest==8.3.4
+pytest-asyncio==1.3.0
+pytest-cov==7.1.0
+black==24.10.0
+flake8==7.1.1
+wheel==0.45.1
+
+# CI/build/security tools
+build==1.2.2.post1
+ruff==0.8.4
+bandit==1.8.0
+pip-audit==2.7.3
