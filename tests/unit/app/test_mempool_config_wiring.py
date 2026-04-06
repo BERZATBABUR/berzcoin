@@ -53,7 +53,53 @@ class TestMempoolConfigWiring(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_init_mempool_honors_legacy_knobs_when_modern_defaults_used(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                node = BerzCoinNode()
+                node.config.set("datadir", str(Path(tmp)))
+                node.config.set("network", "regtest")
+                node.mode_manager = ModeManager(node.config)
+                node.chainstate = _ChainstateStub()
+                node.config.set("persistmempool", False)
+
+                # Legacy knobs only.
+                node.config.set("mempool_min_relay_fee", None)
+                node.config.set("mempoolminfee", 2500)  # sat/kvB-like -> 2 sat/vB floor.
+                node.config.set("maxmempool", 111)  # MiB
+                node.config.set("mempool_max_size_bytes", 300_000_000)  # default value
+
+                ok = await node._init_mempool()
+                self.assertTrue(ok)
+                self.assertIsNotNone(node.mempool)
+                self.assertEqual(int(node.mempool.policy.min_relay_fee), 2)
+                self.assertEqual(int(node.mempool.limits.max_size), 111 * 1024 * 1024)
+
+        asyncio.run(run())
+
+    def test_init_mempool_modern_knobs_override_legacy(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                node = BerzCoinNode()
+                node.config.set("datadir", str(Path(tmp)))
+                node.config.set("network", "regtest")
+                node.mode_manager = ModeManager(node.config)
+                node.chainstate = _ChainstateStub()
+                node.config.set("persistmempool", False)
+
+                node.config.set("mempool_min_relay_fee", 7)
+                node.config.set("mempoolminfee", 2500)
+                node.config.set("mempool_max_size_bytes", 222_222_222)
+                node.config.set("maxmempool", 111)
+
+                ok = await node._init_mempool()
+                self.assertTrue(ok)
+                self.assertIsNotNone(node.mempool)
+                self.assertEqual(int(node.mempool.policy.min_relay_fee), 7)
+                self.assertEqual(int(node.mempool.limits.max_size), 222_222_222)
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()
-

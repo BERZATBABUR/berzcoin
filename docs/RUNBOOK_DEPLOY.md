@@ -13,6 +13,9 @@ Deploy a new node instance reproducibly with health and metrics checks.
 2. Install dependencies: `pip install -e ".[dev]"`.
 3. Validate config values:
    - `network`, `datadir`, `port`, `rpcbind`, `rpcport`
+   - `activation_height_berz_softfork_bip34_strict = 180000`
+   - `activation_height_berz_hardfork_tx_v2 = 180100`
+   - `node_consensus_version = 2`, `enforce_hardfork_guardrails = true`
    - `sync_getdata_batch_size`, `sync_poll_interval_secs`, `blocks_cache_size`
    - Mempool operator knobs:
      - `mempool_min_relay_fee`
@@ -43,6 +46,9 @@ Deploy a new node instance reproducibly with health and metrics checks.
 - Startup safety:
   - On non-regtest, node fails fast if there is no viable discovery source.
   - Override only for controlled environments with `allow_missing_bootstrap = true`.
+- Operator requirement:
+  - DNS seeds and `bootstrap_nodes.json` entries must be real and reachable.
+  - Do not ship placeholder peers such as `seed1.berzcoin.org`.
 
 ## Operator Examples
 1. Strict trusted peers only:
@@ -61,3 +67,4 @@ Deploy a new node instance reproducibly with health and metrics checks.
 - Sync lag trends toward zero.
 - No critical alerts firing from `ops/prometheus/alerts.yml`.
 - `get_mempool_diagnostics` returns policy thresholds and non-empty eviction snapshot structure.
+- Consensus activation keys are pinned uniformly on all production nodes before the mainnet deadline (**July 15, 2026 00:00:00 UTC**).

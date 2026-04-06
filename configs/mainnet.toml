@@ -16,11 +16,14 @@ maxoutbound = 8
 # Discovery
 bootstrap_enabled = true
 bootstrap_file = bootstrap_nodes.json
-dnsseed = false
+allow_missing_bootstrap = false
+dnsseed = true
 # comma-separated hostnames when dnsseed=true
-dnsseeds = seed1.berzcoin.org,seed2.berzcoin.org,seed3.berzcoin.org,dnsseed.berzcoin.org
+# Replace these placeholders with your real seed fleet before production.
+dnsseeds = seed-mainnet-1.berzcoin.net,seed-mainnet-2.berzcoin.net,seed-mainnet-3.berzcoin.net
 addnode =
 connect =
+network_hardening = false
 
 # RPC
 rpcbind = 127.0.0.1
@@ -30,6 +33,12 @@ rpcthreads = 4
 rpcworkqueue = 16
 rpctimeout = 30
 rpc_require_auth = true
+
+# Consensus activation pins (must match rollout runbook on all nodes)
+activation_height_berz_softfork_bip34_strict = 180000
+activation_height_berz_hardfork_tx_v2 = 180100
+node_consensus_version = 2
+enforce_hardfork_guardrails = true
 
 # Wallet
 wallet = default

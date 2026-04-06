@@ -43,9 +43,17 @@ dnsseeds = your.real.seed1.org,your.real.seed2.org
 # Optional: JSON file under datadir (see repo configs/bootstrap_nodes.json)
 bootstrap_file = bootstrap_nodes.json
 bootstrap_enabled = true
+allow_missing_bootstrap = false
+
+# v2 consensus activation pins (mainnet)
+activation_height_berz_softfork_bip34_strict = 180000
+activation_height_berz_hardfork_tx_v2 = 180100
+node_consensus_version = 2
+enforce_hardfork_guardrails = true
 ```
 
 Copy or generate **`bootstrap_nodes.json`** into **`datadir`** if you use `bootstrap_enabled`. The node loads **`bootstrap_nodes`** entries into the address manager on startup.
+Do not ship placeholder hosts. Validate DNS answers and P2P reachability for every configured seed/bootstrap peer.
 
 ## Process manager
 
@@ -79,6 +87,7 @@ Stop via RPC when the node is running: `berzcoin-cli stop` (with correct `-datad
 - Keep **RPC** on **localhost** unless you know how to restrict **IP allowlists** and TLS/reverse proxies.
 - Protect **`~/.berzcoin/.cookie`** (or datadir cookie): RPC auth uses it.
 - **Firewall**: allow **P2P** from the internet only if you intend to accept inbound peers; **RPC** should not be exposed publicly without extra controls.
+- Keep activation settings pinned across all nodes until after the mainnet upgrade deadline (**July 15, 2026 00:00:00 UTC**).
 
 ## Monitoring
 

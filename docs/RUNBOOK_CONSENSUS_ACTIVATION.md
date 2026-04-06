@@ -29,6 +29,9 @@ node_consensus_version = 2
 enforce_hardfork_guardrails = true
 ```
 
+These values must be pinned on every mainnet node (no per-node drift) before the
+mainnet upgrade deadline: **July 15, 2026 00:00:00 UTC**.
+
 You can override from CLI if needed:
 
 ```bash

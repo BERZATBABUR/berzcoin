@@ -989,8 +989,20 @@ class BerzCoinNode:
             relay_fee = max(1, int(self.config.get("mempoolminfee", 1000)) // 1000)
         policy.set_min_relay_fee(max(1, int(relay_fee)))
 
+        # Backward compatibility for legacy maxmempool (MiB) knob.
+        # If operator did not override the modern byte knob, honor maxmempool.
+        max_size_bytes_cfg = self.config.get("mempool_max_size_bytes", 300_000_000)
+        max_size_bytes_default = int(self.config.DEFAULT_CONFIG.get("mempool_max_size_bytes", 300_000_000))
+        max_size_bytes = int(max_size_bytes_cfg)
+        if max_size_bytes == max_size_bytes_default:
+            try:
+                legacy_max_mib = int(self.config.get("maxmempool", 300))
+            except Exception:
+                legacy_max_mib = int(self.config.DEFAULT_CONFIG.get("maxmempool", 300))
+            max_size_bytes = max(1, legacy_max_mib) * 1024 * 1024
+
         limits = MempoolLimits(
-            max_size=int(self.config.get("mempool_max_size_bytes", 300_000_000)),
+            max_size=max_size_bytes,
             max_weight=int(self.config.get("mempool_max_weight", 1_500_000_000)),
             max_transactions=int(self.config.get("mempool_max_transactions", 50_000)),
             max_ancestors=int(self.config.get("mempool_max_ancestors", 25)),
