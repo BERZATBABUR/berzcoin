@@ -358,6 +358,8 @@ class MiningWalletDashboard:
     
     async def start_mining(self, request):
         """Start mining."""
+        if not self.node.miner:
+            return json_response({'error': 'Mining subsystem unavailable'}, status=503)
         try:
             data = await request.json()
         except Exception:
@@ -385,6 +387,8 @@ class MiningWalletDashboard:
     
     async def stop_mining(self, request):
         """Stop mining."""
+        if not self.node.miner:
+            return json_response({'error': 'Mining subsystem unavailable'}, status=503)
         await self.node.miner.stop_mining()
         return json_response({'status': 'stopped'})
     
@@ -407,6 +411,8 @@ class MiningWalletDashboard:
     
     async def set_mining_address(self, request):
         """Set mining reward address (independent from currently active wallet)."""
+        if not self.node.miner:
+            return json_response({'error': 'Mining subsystem unavailable'}, status=503)
         data = await request.json()
         address = (data.get('address') or '').strip()
         if not address:
@@ -1046,78 +1052,97 @@ class MiningWalletDashboard:
                         alert('Enter mining address');
                         return;
                     }
-                    
-                    const response = await fetch('/api/mining/address', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({address})
-                    });
-                    const data = await response.json();
-                    if (data.address) {
-                        document.getElementById('addressStatus').innerHTML = `<span class="success">✅ Address set: ${data.address}</span>`;
-                    } else {
-                        document.getElementById('addressStatus').innerHTML = `<span class="error">❌ ${data.error || 'Failed to set address'}</span>`;
+                    try {
+                        const response = await fetch('/api/mining/address', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({address})
+                        });
+                        const data = await response.json();
+                        if (data.address) {
+                            document.getElementById('addressStatus').innerHTML = `<span class="success">✅ Address set: ${data.address}</span>`;
+                        } else {
+                            document.getElementById('addressStatus').innerHTML = `<span class="error">❌ ${data.error || 'Failed to set address'}</span>`;
+                        }
+                    } catch (err) {
+                        document.getElementById('addressStatus').innerHTML = `<span class="error">❌ Failed to set address (${err})</span>`;
                     }
                 }
                 
                 async function startMining() {
                     const address = document.getElementById('miningAddress').value;
-                    const response = await fetch('/api/mining/start', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({address: address || undefined})
-                    });
-                    const data = await response.json();
-                    if (data.status === 'started') {
-                        document.getElementById('miningStatus').innerHTML = '⛏️ MINING ACTIVE ⛏️';
-                    } else {
-                        alert(data.error);
+                    try {
+                        const response = await fetch('/api/mining/start', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({address: address || undefined})
+                        });
+                        const data = await response.json();
+                        if (data.status === 'started') {
+                            document.getElementById('miningStatus').innerHTML = '⛏️ MINING ACTIVE ⛏️';
+                        } else {
+                            alert(data.error || 'Failed to start mining');
+                        }
+                    } catch (err) {
+                        alert(`Failed to start mining: ${err}`);
                     }
                 }
                 
                 async function stopMining() {
-                    await fetch('/api/mining/stop', {method: 'POST'});
-                    document.getElementById('miningStatus').innerHTML = '⏹️ Mining Stopped';
+                    try {
+                        await fetch('/api/mining/stop', {method: 'POST'});
+                        document.getElementById('miningStatus').innerHTML = '⏹️ Mining Stopped';
+                    } catch (err) {
+                        alert(`Failed to stop mining: ${err}`);
+                    }
                 }
                 
                 async function updateStats() {
-                    // Mining info
-                    const miningResp = await fetch('/api/mining/info');
-                    const mining = await miningResp.json();
-                    document.getElementById('miningStats').innerHTML = `
-                        Blocks Mined: ${mining.blocks_mined}<br>
-                        Hashrate: ${mining.hashrate.toFixed(2)} H/s<br>
-                        Current Height: ${mining.current_height}<br>
-                        Target Block Time: ${mining.target_block_time}s<br>
-                        Last Reward Address: ${mining.last_reward_address || '(none yet)'}<br>
-                        Last Subsidy: ${mining.last_subsidy_sats} sats<br>
-                        Last Fees: ${mining.last_fees_sats} sats<br>
-                        Last Total Reward: ${mining.last_reward_sats} sats<br>
-                        Last Stop Reason: ${mining.last_stop_reason || '(none)'}
-                    `;
-                    
-                    // Network info
-                    const bcResp = await fetch('/api/blockchain');
-                    const bc = await bcResp.json();
-                    document.getElementById('networkInfo').innerHTML = `
-                        Blockchain Height: ${bc.height}<br>
-                        Difficulty: ${bc.difficulty.toFixed(2)}<br>
-                        Best Hash: ${bc.best_hash.substring(0, 32)}...
-                    `;
+                    try {
+                        // Mining info
+                        const miningResp = await fetch('/api/mining/info');
+                        const mining = await miningResp.json();
+                        document.getElementById('miningStats').innerHTML = `
+                            Blocks Mined: ${mining.blocks_mined}<br>
+                            Hashrate: ${(Number(mining.hashrate) || 0).toFixed(2)} H/s<br>
+                            Current Height: ${mining.current_height}<br>
+                            Target Block Time: ${mining.target_block_time}s<br>
+                            Last Reward Address: ${mining.last_reward_address || '(none yet)'}<br>
+                            Last Subsidy: ${mining.last_subsidy_sats} sats<br>
+                            Last Fees: ${mining.last_fees_sats} sats<br>
+                            Last Total Reward: ${mining.last_reward_sats} sats<br>
+                            Last Stop Reason: ${mining.last_stop_reason || '(none)'}
+                        `;
 
-                    // Address comparison
-                    const walletResp = await fetch('/api/wallet/info');
-                    const wallet = await walletResp.json();
-                    const walletAddr = wallet && wallet.active ? wallet.address : '';
-                    const miningAddr = mining && mining.mining_address ? mining.mining_address : '';
-                    const mismatch = walletAddr && miningAddr && walletAddr !== miningAddr;
-                    document.getElementById('addressCompare').innerHTML = `
-                        Wallet Address: ${walletAddr || '(not active)'}<br>
-                        Mining Reward Address: ${miningAddr || '(not set)'}<br>
-                        ${mismatch ? '<span class="error">⚠️ Mismatch: rewards go to a different address.</span>' : '<span class="success">✅ Addresses aligned.</span>'}
-                    `;
-                    
-                    document.getElementById('miningStatus').innerHTML = mining.mining_active ? '⛏️ MINING ACTIVE ⛏️' : '⏹️ Mining Stopped';
+                        // Network info
+                        const bcResp = await fetch('/api/blockchain');
+                        const bc = await bcResp.json();
+                        const bestHash = bc.best_hash ? `${bc.best_hash.substring(0, 32)}...` : '(none yet)';
+                        document.getElementById('networkInfo').innerHTML = `
+                            Blockchain Height: ${bc.height}<br>
+                            Difficulty: ${(Number(bc.difficulty) || 0).toFixed(2)}<br>
+                            Best Hash: ${bestHash}
+                        `;
+
+                        // Address comparison
+                        const walletResp = await fetch('/api/wallet/info');
+                        const wallet = await walletResp.json();
+                        const walletAddr = wallet && wallet.active ? wallet.address : '';
+                        const miningAddr = mining && mining.mining_address ? mining.mining_address : '';
+                        const mismatch = walletAddr && miningAddr && walletAddr !== miningAddr;
+                        document.getElementById('addressCompare').innerHTML = `
+                            Wallet Address: ${walletAddr || '(not active)'}<br>
+                            Mining Reward Address: ${miningAddr || '(not set)'}<br>
+                            ${mismatch ? '<span class="error">⚠️ Mismatch: rewards go to a different address.</span>' : '<span class="success">✅ Addresses aligned.</span>'}
+                        `;
+
+                        if (miningAddr) {
+                            document.getElementById('miningAddress').value = miningAddr;
+                        }
+                        document.getElementById('miningStatus').innerHTML = mining.mining_active ? '⛏️ MINING ACTIVE ⛏️' : '⏹️ Mining Stopped';
+                    } catch (err) {
+                        document.getElementById('networkInfo').innerHTML = `<span class="error">Failed to load stats: ${err}</span>`;
+                    }
                 }
                 
                 updateStats();

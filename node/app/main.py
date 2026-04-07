@@ -1228,7 +1228,9 @@ class BerzCoinNode:
     async def _init_mining(self) -> bool:
         """Initialize mining node."""
         is_regtest = self.config.get("network") == "regtest"
-        use_miner = self.mode_manager.is_mining() or is_regtest
+        # Keep a miner instance available when dashboard is enabled so
+        # /api/mining/* handlers remain functional even if mining=false.
+        use_miner = self.mode_manager.is_mining() or is_regtest or bool(self.config.get("webdashboard", False))
         if not use_miner:
             self.miner = None
             return True
