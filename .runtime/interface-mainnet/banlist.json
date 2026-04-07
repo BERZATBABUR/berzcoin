@@ -1,0 +1,12 @@
+{
+  "saved_at": 1775421382,
+  "bans": [
+    {
+      "address": "127.0.0.1",
+      "banned_until": 1775424982,
+      "reason": "5 offenses: connect_failed",
+      "banned_at": 1775421382,
+      "permanent": false
+    }
+  ]
+}

@@ -189,3 +189,43 @@ AttributeError: 'NoneType' object has no attribute 'mining_address' and no __dic
 2026-04-05 23:31:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
 2026-04-05 23:32:22 - berzcoin - INFO - Syncing: -1 / 0
 2026-04-05 23:32:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:32:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:32:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:33:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:33:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:33:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:33:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:34:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:34:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:34:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:34:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:35:22 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:35:22 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:35:52 - berzcoin - INFO - Syncing: -1 / 0
+2026-04-05 23:35:52 - berzcoin - INFO - Syncing from 127.0.0.1:18444: -1 -> 0
+2026-04-05 23:36:19 - berzcoin - INFO - Peer disconnected: 127.0.0.1:18444
+2026-04-05 23:36:19 - berzcoin - INFO - Disconnected from 127.0.0.1:18444
+2026-04-05 23:36:22 - berzcoin - ERROR - Failed to connect to 127.0.0.1:18444: [Errno 111] Connect call failed ('127.0.0.1', 18444)
+2026-04-05 23:36:22 - berzcoin - DEBUG - Marked address as failed: 127.0.0.1:18444
+2026-04-05 23:36:22 - berzcoin - ERROR - Failed to connect to 127.0.0.1:18444: [Errno 111] Connect call failed ('127.0.0.1', 18444)
+2026-04-05 23:36:22 - berzcoin - DEBUG - Marked address as failed: 127.0.0.1:18444
+2026-04-05 23:36:22 - berzcoin - ERROR - Failed to connect to 127.0.0.1:18444: [Errno 111] Connect call failed ('127.0.0.1', 18444)
+2026-04-05 23:36:22 - berzcoin - DEBUG - Marked address as failed: 127.0.0.1:18444
+2026-04-05 23:36:22 - berzcoin - ERROR - Failed to connect to 127.0.0.1:18444: [Errno 111] Connect call failed ('127.0.0.1', 18444)
+2026-04-05 23:36:22 - berzcoin - DEBUG - Marked address as failed: 127.0.0.1:18444
+2026-04-05 23:36:22 - berzcoin - ERROR - Failed to connect to 127.0.0.1:18444: [Errno 111] Connect call failed ('127.0.0.1', 18444)
+2026-04-05 23:36:22 - berzcoin - INFO - Banned 127.0.0.1 for 3600s: 5 offenses: connect_failed
+2026-04-05 23:36:22 - berzcoin - DEBUG - Marked address as failed: 127.0.0.1:18444
+2026-04-05 23:43:26 - berzcoin - INFO - Wallet auto-locked after timeout
+Error handling request
+Traceback (most recent call last):
+  File "/home/berzat-babur/anaconda3/lib/python3.13/site-packages/aiohttp/web_protocol.py", line 480, in _handle_request
+    resp = await request_handler(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/berzat-babur/anaconda3/lib/python3.13/site-packages/aiohttp/web_app.py", line 569, in _handle
+    return await handler(request)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/berzat-babur/Desktop/bitcoin/BerzCoin/node/web/mining_wallet_dashboard.py", line 368, in start_mining
+    mining_address = (self.node.miner.mining_address or '').strip()
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'mining_address'
