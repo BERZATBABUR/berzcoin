@@ -1,23 +1,9 @@
 {
   "version": 1,
   "bootstrap_nodes": [
-    {
-      "address": "seed1.berzcoin.org",
-      "port": 8333,
-      "services": 1,
-      "last_seen": 0
-    },
-    {
-      "address": "seed2.berzcoin.org",
-      "port": 8333,
-      "services": 1,
-      "last_seen": 0
-    }
+    "203.0.113.10:8333",
+    "198.51.100.22:8333"
   ],
-  "hardcoded_seeds": [
-    "45.76.123.45:8333",
-    "108.61.123.45:8333",
-    "207.148.123.45:8333"
-  ],
+  "hardcoded_seeds": [],
   "last_updated": 1700000000
 }

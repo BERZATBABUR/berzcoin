@@ -62,12 +62,33 @@ class BansStore:
 
     def record_offense(self, address: str, offense: str) -> None:
         logger.warning(f"Offense recorded for {address}: {offense}")
-        offenses = self._get_offense_count(address)
+        offenses = self._get_offense_count(address) + 1
+        self._set_offense_count(address, offenses)
         if offenses >= 3:
             self.ban_peer(address, 86400, f"Multiple offenses: {offense}")
 
     def _get_offense_count(self, address: str) -> int:
-        return 0
+        result = self.db.fetch_one(
+            "SELECT value FROM settings WHERE key = ?",
+            (self._offense_count_key(address),),
+        )
+        try:
+            return int(result["value"]) if result else 0
+        except Exception:
+            return 0
+
+    def _set_offense_count(self, address: str, count: int) -> None:
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (self._offense_count_key(address), str(max(0, int(count))), int(time.time())),
+        )
+
+    @staticmethod
+    def _offense_count_key(address: str) -> str:
+        return f"offense_count:{str(address or '').strip()}"
 
     def clear_all_bans(self) -> int:
         count = self.get_ban_count()

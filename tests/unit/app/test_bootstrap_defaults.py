@@ -11,10 +11,10 @@ class TestBootstrapDefaults(unittest.TestCase):
     def test_dns_default_seeds_per_network(self) -> None:
         cfg = Config()
         cfg.set("network", "mainnet")
-        self.assertGreater(len(cfg.get_dns_seed_hosts()), 0)
+        self.assertEqual(cfg.get_dns_seed_hosts(), [])
 
         cfg.set("network", "testnet")
-        self.assertGreater(len(cfg.get_dns_seed_hosts()), 0)
+        self.assertEqual(cfg.get_dns_seed_hosts(), [])
 
         cfg.set("network", "regtest")
         self.assertEqual(cfg.get_dns_seed_hosts(), [])
@@ -63,6 +63,48 @@ class TestBootstrapDefaults(unittest.TestCase):
             self.assertEqual(sources["addnode"], [])
             self.assertEqual(sources["bootstrap_file"], [])
             self.assertEqual(sources["dns_seeds"], [])
+
+    def test_bootstrap_file_accepts_object_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config()
+            cfg.set("datadir", tmp)
+            bootstrap_path = Path(tmp) / "bootstrap_nodes.json"
+            bootstrap_path.write_text(
+                """
+                {
+                  "bootstrap_nodes": [
+                    {"address": "198.51.100.12", "port": 8333},
+                    {"address": "203.0.113.55"}
+                  ]
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                cfg.get_bootstrap_nodes(),
+                ["198.51.100.12:8333", "203.0.113.55"],
+            )
+
+    def test_load_accepts_sectionless_legacy_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = Path(tmp) / "berzcoin.conf"
+            conf.write_text(
+                "\n".join(
+                    [
+                        "network=regtest",
+                        "datadir=/tmp/berzcoin-legacy",
+                        "port=18444",
+                        "rpcport=18443",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            cfg = Config(str(conf))
+            self.assertEqual(cfg.get("network"), "regtest")
+            self.assertEqual(cfg.get("datadir"), "/tmp/berzcoin-legacy")
+            self.assertEqual(cfg.get("port"), 18444)
+            self.assertEqual(cfg.get("rpcport"), 18443)
 
 
 if __name__ == "__main__":

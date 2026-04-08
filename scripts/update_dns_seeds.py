@@ -18,7 +18,7 @@ import socket
 import sys
 import time
 from pathlib import Path
-from typing import List, Set
+from typing import Dict, List, Set
 
 DEFAULT_SEEDS = [
     "seed1.berzcoin.org",
@@ -56,8 +56,30 @@ def resolve_seed(hostname: str, port: int) -> tuple[Set[str], str | None]:
     return out, err
 
 
-def update_seeds(seeds: List[str], port: int, output: Path) -> int:
+def probe_endpoint(addr: str, timeout_secs: float) -> tuple[bool, str | None]:
+    host, _, raw_port = addr.rpartition(":")
+    if not host or not raw_port:
+        return False, "invalid host:port"
+    try:
+        port = int(raw_port)
+    except ValueError:
+        return False, "invalid port"
+    try:
+        with socket.create_connection((host, port), timeout=timeout_secs):
+            return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def update_seeds(
+    seeds: List[str],
+    port: int,
+    output: Path,
+    probe_timeout_secs: float = 0.0,
+    require_reachable: bool = False,
+) -> int:
     all_nodes: Set[str] = set()
+    all_live_nodes: Set[str] = set()
     per_seed: dict[str, dict[str, object]] = {}
 
     for seed in seeds:
@@ -67,20 +89,50 @@ def update_seeds(seeds: List[str], port: int, output: Path) -> int:
             per_seed[seed] = {"status": "error", "error": err, "count": 0}
             print(f"[FAIL] {seed}: {err}")
         else:
-            per_seed[seed] = {"status": "ok", "count": len(nodes), "nodes": sorted(nodes)}
+            seed_result: Dict[str, object] = {
+                "status": "ok",
+                "count": len(nodes),
+                "nodes": sorted(nodes),
+            }
             print(f"[OK] {seed}: {len(nodes)} node(s)")
+
+            if probe_timeout_secs > 0:
+                live_nodes: List[str] = []
+                failed: Dict[str, str] = {}
+                for node in sorted(nodes):
+                    ok, probe_err = probe_endpoint(node, probe_timeout_secs)
+                    if ok:
+                        live_nodes.append(node)
+                        all_live_nodes.add(node)
+                    else:
+                        failed[node] = probe_err or "unreachable"
+                seed_result["live_count"] = len(live_nodes)
+                seed_result["live_nodes"] = live_nodes
+                if failed:
+                    seed_result["probe_errors"] = failed
+                print(
+                    f"      probe: {len(live_nodes)}/{len(nodes)} reachable "
+                    f"(timeout={probe_timeout_secs:.1f}s)"
+                )
+            per_seed[seed] = seed_result
+
+    chosen_nodes = all_live_nodes if (require_reachable and probe_timeout_secs > 0) else all_nodes
 
     output.parent.mkdir(parents=True, exist_ok=True)
     config = {
         "dns_seeds": seeds,
-        "bootstrap_nodes": sorted(all_nodes),
+        "bootstrap_nodes": sorted(chosen_nodes),
         "p2p_port": port,
         "last_updated": int(time.time()),
+        "health_probe_timeout_secs": probe_timeout_secs,
+        "health_probe_require_reachable": bool(require_reachable and probe_timeout_secs > 0),
+        "resolved_node_count": len(all_nodes),
+        "reachable_node_count": len(all_live_nodes) if probe_timeout_secs > 0 else None,
         "per_seed": per_seed,
     }
     output.write_text(json.dumps(config, indent=2), encoding="utf-8")
-    print(f"\n[OK] Wrote {output} ({len(all_nodes)} unique bootstrap node(s))")
-    if not all_nodes:
+    print(f"\n[OK] Wrote {output} ({len(chosen_nodes)} bootstrap node(s))")
+    if not chosen_nodes:
         print("[WARN] No addresses resolved; check DNS or seed hostnames.")
     return 0
 
@@ -105,9 +157,28 @@ def main() -> None:
         default=None,
         help="JSON output path (default: <repo>/configs/bootstrap_nodes.json)",
     )
+    parser.add_argument(
+        "--probe-timeout-secs",
+        type=float,
+        default=0.0,
+        help="Optional TCP health probe timeout per resolved node (0 disables probes)",
+    )
+    parser.add_argument(
+        "--require-reachable",
+        action="store_true",
+        help="When probing is enabled, keep only reachable nodes in bootstrap_nodes",
+    )
     args = parser.parse_args()
     out = args.output if args.output else repo_root() / "configs" / "bootstrap_nodes.json"
-    sys.exit(update_seeds(list(args.seeds), args.port, out))
+    sys.exit(
+        update_seeds(
+            list(args.seeds),
+            args.port,
+            out,
+            probe_timeout_secs=max(0.0, float(args.probe_timeout_secs)),
+            require_reachable=bool(args.require_reachable),
+        )
+    )
 
 
 if __name__ == "__main__":

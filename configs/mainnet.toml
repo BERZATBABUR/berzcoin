@@ -17,10 +17,10 @@ maxoutbound = 8
 bootstrap_enabled = true
 bootstrap_file = bootstrap_nodes.json
 allow_missing_bootstrap = false
-dnsseed = true
-# comma-separated hostnames when dnsseed=true
-# Replace these placeholders with your real seed fleet before production.
-dnsseeds = seed-mainnet-1.berzcoin.net,seed-mainnet-2.berzcoin.net,seed-mainnet-3.berzcoin.net
+dnsseed = false
+# comma-separated hostnames when dnsseed=true (must be real and reachable).
+# Example: dnsseeds = seed1.yourdomain.org,seed2.yourdomain.org
+dnsseeds =
 addnode =
 connect =
 network_hardening = false

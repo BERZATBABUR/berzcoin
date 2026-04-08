@@ -60,7 +60,17 @@ class BlocksStore:
                     INSERT INTO transactions
                     (txid, block_hash, height, "index", version, locktime, size, weight, is_coinbase)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (txid, block_hash, height, i, tx.version, tx.locktime, len(tx.serialize()), 0, tx.is_coinbase()))
+                """, (
+                    txid,
+                    block_hash,
+                    height,
+                    i,
+                    tx.version,
+                    tx.locktime,
+                    len(tx.serialize()),
+                    tx.weight(),
+                    tx.is_coinbase(),
+                ))
 
                 for j, txin in enumerate(tx.vin):
                     witness_data = txin.witness.serialize() if txin.witness else b''

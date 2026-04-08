@@ -74,21 +74,45 @@ class UTXOStore:
         return result['total'] if result and result['total'] else 0
 
     def prune_coinbase_utxos(self, current_height: int, maturity: int = 100) -> int:
+        # Mature coinbase UTXOs are spendable and must not be pruned.
+        # Only remove clearly-invalid future-dated entries (corruption guard).
         result = self.db.execute("""
             DELETE FROM utxo
-            WHERE is_coinbase = 1 AND height < ? - ?
-        """, (current_height, maturity))
+            WHERE is_coinbase = 1 AND height > ?
+        """, (current_height,))
         pruned = result.rowcount
         if pruned > 0:
-            logger.debug(f"Pruned {pruned} matured coinbase UTXOs")
+            logger.warning(f"Pruned {pruned} invalid future coinbase UTXOs")
         return pruned
 
     def get_utxos_for_spending(self, address: str, target_value: int, min_conf: int = 1) -> List[Dict[str, Any]]:
-        return self.db.fetch_all("""
+        if target_value <= 0:
+            return []
+
+        min_conf = max(0, int(min_conf))
+        tip_row = self.db.fetch_one("SELECT MAX(height) AS best_height FROM blocks WHERE is_valid = 1")
+        best_height = int(tip_row["best_height"]) if tip_row and tip_row["best_height"] is not None else -1
+
+        utxos = self.db.fetch_all(
+            """
             SELECT * FROM utxo
             WHERE address = ?
             ORDER BY value ASC
-        """, (address,))
+            """,
+            (address,),
+        )
+
+        selected: List[Dict[str, Any]] = []
+        total = 0
+        for row in utxos:
+            confirmations = (best_height - int(row["height"]) + 1) if best_height >= int(row["height"]) else 0
+            if confirmations < min_conf:
+                continue
+            selected.append(row)
+            total += int(row["value"])
+            if total >= target_value:
+                break
+        return selected
 
     def compact(self) -> None:
         self.db.execute("VACUUM")

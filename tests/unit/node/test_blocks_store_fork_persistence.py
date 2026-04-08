@@ -74,6 +74,13 @@ class TestBlocksStoreForkPersistence(unittest.TestCase):
                 self.assertIsNotNone(r2)
                 self.assertEqual(r1.header.hash_hex(), b1.header.hash_hex())
                 self.assertEqual(r2.header.hash_hex(), b2.header.hash_hex())
+
+                tx_row = db.fetch_one(
+                    "SELECT weight FROM transactions WHERE txid = ?",
+                    (b1.transactions[0].txid().hex(),),
+                )
+                self.assertIsNotNone(tx_row)
+                self.assertEqual(int(tx_row["weight"]), b1.transactions[0].weight())
             finally:
                 db.disconnect()
 

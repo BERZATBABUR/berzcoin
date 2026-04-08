@@ -27,6 +27,7 @@ from node.rpc.handlers.mining_control import MiningControlHandlers
 from node.rpc.handlers.wallet import WalletHandlers
 from node.rpc.handlers.wallet_control import WalletControlHandlers
 from node.rpc.server import RPCServer
+from node.indexer import TransactionIndex, AddressIndex
 from node.storage.blocks_store import BlocksStore
 from node.storage.db import Database
 from node.storage.mempool_store import MempoolStore
@@ -74,6 +75,8 @@ class BerzCoinNode:
         self.db: Optional[Database] = None
         self.blocks_store: Optional[BlocksStore] = None
         self.utxo_store: Optional[UTXOStore] = None
+        self.tx_indexer: Optional[TransactionIndex] = None
+        self.address_indexer: Optional[AddressIndex] = None
         self.chainstate: Optional[ChainState] = None
         self.connman: Optional[ConnectionManager] = None
         self.mempool: Optional[Mempool] = None
@@ -118,6 +121,8 @@ class BerzCoinNode:
         if not await self._init_database():
             return False
         if not await self._init_chainstate():
+            return False
+        if not await self._init_indexers():
             return False
         if not self._hardfork_guardrails_ok():
             return False
@@ -356,6 +361,8 @@ class BerzCoinNode:
         if self.mempool:
             for connected_block in connected:
                 await self.mempool.handle_connected_block(connected_block)
+        if self.tx_indexer:
+            self._reconcile_indexes_after_reorg(_disconnected, connected)
         if relay and self.connman:
             await self.connman.broadcast_block(block)
         self._remember_known_block(block_hash)
@@ -374,9 +381,118 @@ class BerzCoinNode:
             return False
         block_hash = block.header.hash_hex()
         self.chainstate.set_best_block(block_hash, height, chainwork_total)
+        self._index_connected_block(block, height)
         if self.mempool:
             await self.mempool.handle_connected_block(block)
         return True
+
+    def _index_connected_block(self, block: Block, height: int) -> None:
+        if not self.tx_indexer:
+            return
+
+        block_hash = block.header.hash_hex()
+        block_time = int(block.header.timestamp)
+        for block_tx_index, tx in enumerate(block.transactions):
+            txid = tx.txid().hex()
+            self.tx_indexer.index_transaction(
+                tx=tx,
+                block_hash=block_hash,
+                height=height,
+                block_time=block_time,
+                block_tx_index=int(block_tx_index),
+            )
+
+            if self.address_indexer:
+                for out_idx, txout in enumerate(tx.vout):
+                    address = self.tx_indexer._extract_address(txout.script_pubkey)
+                    if address:
+                        self.address_indexer.index_address(
+                            address=address,
+                            txid=txid,
+                            height=height,
+                            block_time=block_time,
+                            block_tx_index=int(block_tx_index),
+                            is_input=False,
+                            is_output=True,
+                            io_index=int(out_idx),
+                            value=int(txout.value),
+                        )
+
+            if tx.is_coinbase():
+                continue
+
+            for in_idx, txin in enumerate(tx.vin):
+                prev_txid = txin.prev_tx_hash.hex()
+                prev_vout = int(txin.prev_tx_index)
+                self.tx_indexer.mark_output_spent(prev_txid, prev_vout, txid)
+                if self.address_indexer and self.db:
+                    prev_row = self.db.fetch_one(
+                        """
+                        SELECT address, value FROM tx_outputs
+                        WHERE txid = ? AND output_index = ?
+                        """,
+                        (prev_txid, prev_vout),
+                    )
+                    if prev_row and prev_row.get("address"):
+                        self.address_indexer.index_address(
+                            address=str(prev_row["address"]),
+                            txid=txid,
+                            height=height,
+                            block_time=block_time,
+                            block_tx_index=int(block_tx_index),
+                            is_input=True,
+                            is_output=False,
+                            io_index=int(in_idx),
+                            value=int(prev_row.get("value") or 0),
+                        )
+
+    def _deindex_disconnected_block(self, block: Block) -> None:
+        if not self.tx_indexer or not self.db:
+            return
+
+        txids = [tx.txid().hex() for tx in block.transactions]
+        if not txids:
+            return
+
+        for txid in txids:
+            inputs = self.db.fetch_all(
+                """
+                SELECT prev_txid, prev_vout FROM tx_inputs
+                WHERE txid = ?
+                """,
+                (txid,),
+            )
+            for row in inputs:
+                self.db.execute(
+                    """
+                    UPDATE tx_outputs
+                    SET spent = 0, spent_by = NULL
+                    WHERE txid = ? AND output_index = ?
+                    """,
+                    (row["prev_txid"], int(row["prev_vout"])),
+                )
+            self.db.execute("DELETE FROM tx_inputs WHERE txid = ?", (txid,))
+            self.db.execute("DELETE FROM tx_outputs WHERE txid = ?", (txid,))
+            self.db.execute("DELETE FROM tx_index WHERE txid = ?", (txid,))
+            self.tx_indexer._cache.pop(txid, None)
+
+    def _reconcile_indexes_after_reorg(
+        self,
+        disconnected: List[Block],
+        connected: List[Block],
+    ) -> None:
+        if not self.tx_indexer or not self.db or not self.chainstate:
+            return
+
+        with self.db.transaction():
+            for block in disconnected:
+                self._deindex_disconnected_block(block)
+            for block in connected:
+                entry = self.chainstate.block_index.get_block(block.header.hash_hex())
+                if entry is not None:
+                    self._index_connected_block(block, int(entry.height))
+            if self.address_indexer:
+                self.address_indexer.rebuild_from_tx_index()
 
     async def _process_orphan_children(self, parent_hash: str, relay: bool) -> None:
         while True:
@@ -972,6 +1088,25 @@ class BerzCoinNode:
             setattr(self.chainstate, "network", self.config.get("network"))
         except Exception:
             pass
+        return True
+
+    async def _init_indexers(self) -> bool:
+        assert self.db is not None
+        assert self.chainstate is not None
+
+        if bool(self.config.get("txindex", False)):
+            self.tx_indexer = TransactionIndex(self.db, self.chainstate)
+        else:
+            self.tx_indexer = None
+
+        if bool(self.config.get("addressindex", False)):
+            if self.tx_indexer is None:
+                logger.warning("addressindex requested but txindex is disabled; address index disabled")
+                self.address_indexer = None
+            else:
+                self.address_indexer = AddressIndex(self.db)
+        else:
+            self.address_indexer = None
         return True
 
     async def _init_mempool(self) -> bool:

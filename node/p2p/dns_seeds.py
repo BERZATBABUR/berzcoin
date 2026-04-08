@@ -9,19 +9,11 @@ from shared.utils.logging import get_logger
 logger = get_logger()
 
 class DNSSeeds:
-    # Network-profile defaults for operator bootstrap safety.
-    # Operators can always override with `dnsseeds=...` in config.
+    # Shipped defaults are intentionally empty for public networks.
+    # Operators must explicitly provide real seed hostnames via config.
     DEFAULT_SEEDS_BY_NETWORK = {
-        "mainnet": [
-            "seed-mainnet-1.berzcoin.net",
-            "seed-mainnet-2.berzcoin.net",
-            "seed-mainnet-3.berzcoin.net",
-        ],
-        "testnet": [
-            "seed-testnet-1.berzcoin.net",
-            "seed-testnet-2.berzcoin.net",
-        ],
-        # Regtest remains manual/explicit by design.
+        "mainnet": [],
+        "testnet": [],
         "regtest": [],
     }
 

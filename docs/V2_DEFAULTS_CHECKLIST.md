@@ -43,7 +43,7 @@ Checklist:
 | `maxconnections` | `125` |
 | `maxoutbound` | `8` |
 | `dnsseed` | `true` |
-| `dnsseeds` | `[]` (falls back to profile defaults) |
+| `dnsseeds` | `[]` (no profile fallback; operator must set real seeds) |
 | `addnode` | `[]` |
 | `connect` | `[]` |
 | `bootstrap_enabled` | `true` |
@@ -59,8 +59,8 @@ Checklist:
 | `custom_activation_heights` | `{}` |
 
 DNS seed profile defaults (`node/p2p/dns_seeds.py`):
-- `mainnet`: `seed-mainnet-1.berzcoin.net`, `seed-mainnet-2.berzcoin.net`, `seed-mainnet-3.berzcoin.net`
-- `testnet`: `seed-testnet-1.berzcoin.net`, `seed-testnet-2.berzcoin.net`
+- `mainnet`: none
+- `testnet`: none
 - `regtest`: no DNS defaults
 
 Checklist:
@@ -92,6 +92,15 @@ Validation evidence (2026-04-06 UTC):
 - `pytest tests/unit/rpc/test_wallet_private_key_activation.py -vv`
 - `pytest tests/unit/rpc/test_activatewallet_rpc.py -vv`
 - `pytest tests/unit/wallet/test_wallet_backup.py -vv`
+
+Additional readiness evidence (2026-04-08 UTC):
+- `pytest -q tests/unit -q`
+- `pytest -q tests/integration -q`
+- `pytest -q tests/e2e -q`
+- `pytest -q tests/unit/node/test_indexer_reorg_rollback.py tests/unit/node/test_indexer_wiring.py tests/unit/node/test_reorg_manager.py tests/integration/test_reorg_activation_boundary.py -q`
+- `BERZ_SOAK=1 BERZ_SOAK_ITERS=200 pytest -q tests/integration/test_fault_injection_soak.py -q`
+- `BERZ_CHAOS_LONG=1 BERZ_CHAOS_LONG_STEPS=1200 pytest -q tests/chaos/test_network_chaos_suite.py::TestNetworkChaosSuite::test_chaos_long_run -q`
+- See `docs/MAINNET_READINESS_REPORT_2026-04-08.md` for gate-by-gate results.
 
 ## 4. v2 Freeze Sign-off
 

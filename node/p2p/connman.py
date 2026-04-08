@@ -187,7 +187,11 @@ class ConnectionManager:
         # Start inbound listener unless in connect-only mode.
         if not self.connect_only:
             try:
-                bind = "0.0.0.0"
+                bind = (
+                    str(self.node_config.get("bind", "0.0.0.0"))
+                    if self.node_config
+                    else "0.0.0.0"
+                )
                 port = self.node_config.get("port", 8333) if self.node_config else 8333
                 host = bind
                 self._server = await asyncio.start_server(self.accept_connection, host, int(port))

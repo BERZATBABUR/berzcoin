@@ -4,6 +4,7 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from node.p2p.addrman import AddrMan
 from node.p2p.connman import ConnectionManager
@@ -11,17 +12,31 @@ from node.p2p.limits import OutboundClass
 
 
 class _Cfg:
-    def __init__(self, hardening: bool, connect=None, addnode=None, bootstrap=None):
+    def __init__(
+        self,
+        hardening: bool,
+        connect=None,
+        addnode=None,
+        bootstrap=None,
+        bind: str = "0.0.0.0",
+        port: int = 8333,
+    ):
         self._hardening = bool(hardening)
         self._connect = list(connect or [])
         self._addnode = list(addnode or [])
         self._bootstrap = list(bootstrap or [])
+        self._bind = str(bind)
+        self._port = int(port)
 
     def get(self, key, default=None):
         if key == "network_hardening":
             return self._hardening
         if key == "bootstrap_enabled":
             return bool(self._bootstrap)
+        if key == "bind":
+            return self._bind
+        if key == "port":
+            return self._port
         return default
 
     def get_connect_peers(self):
@@ -190,6 +205,25 @@ class TestConnmanHardening(unittest.TestCase):
         self.assertEqual(addrs[:1], ["203.0.113.1:8333"])
         self.assertNotIn("198.51.100.2:8333", addrs)
         self.assertNotIn("192.0.2.3:8333", addrs)
+
+    def test_listener_uses_configured_bind(self) -> None:
+        async def run() -> None:
+            cfg = _Cfg(False, bind="127.0.0.1", port=18444)
+            cm = ConnectionManager(AddrMan(), node_config=cfg)
+
+            fake_server = mock.AsyncMock()
+            fake_server.close = mock.Mock()
+            fake_server.wait_closed = mock.AsyncMock()
+
+            with mock.patch("asyncio.start_server", new=mock.AsyncMock(return_value=fake_server)) as start_server:
+                await cm.start()
+                start_server.assert_awaited_once()
+                args = start_server.await_args.args
+                self.assertEqual(args[1], "127.0.0.1")
+                self.assertEqual(args[2], 18444)
+                await cm.stop()
+
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

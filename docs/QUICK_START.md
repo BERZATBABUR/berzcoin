@@ -130,13 +130,41 @@ Use `--rpc-cookie-file /path/to/.cookie` or `--rpc-password` if RPC is not the d
 
 `berzcoind` does not implement `-daemon`; run it under **systemd**, **tmux**, or `nohup`, and use a proper config.
 
-**Do not** copy `configs/mainnet_seeds.toml` directly to `berzcoin.conf`—that file is **TOML** for documentation. The node reads **INI** (`ConfigParser`). Start from **`configs/secure_mainnet.toml`** and set **`dnsseed`** / **`dnsseeds`** to your production seed hostnames (comma-separated).
-Note: DNS seeding is disabled by default in shipped nodes to avoid a centralized bootstrap trust. Enable `dnsseed = true` and populate `dnsseeds` or provide a `bootstrap_nodes.json` in your datadir when you run a public node.
+### Mainnet bootstrap assistant (recommended)
+
+Use one command to generate `berzcoin.conf` and bootstrap peers in your datadir:
 
 ```bash
-# 1. Example: base secure profile (edit paths, rpcbind, dnsseeds, wallet section as needed)
-cp configs/secure_mainnet.toml ~/.berzcoin/berzcoin.conf
-# Merge seed names from configs/mainnet_seeds.toml into dnsseeds = host1,host2,...
+python scripts/mainnet_bootstrap_assistant.py \
+  --datadir ~/.berzcoin-mainnet-a \
+  --bootstrap-from-seeds seed-a.example.org,seed-b.example.org \
+  --probe-timeout-secs 2.0 \
+  --require-reachable \
+  --addnode 203.0.113.10:8333 \
+  --dnsseed --dnsseeds seed-a.example.org,seed-b.example.org
+```
+
+Then start:
+
+```bash
+python -m node.app.main -conf ~/.berzcoin-mainnet-a/berzcoin.conf
+```
+
+If you already have a vetted bootstrap file:
+
+```bash
+python scripts/mainnet_bootstrap_assistant.py \
+  --datadir ~/.berzcoin-mainnet-a \
+  --bootstrap-source ./configs/bootstrap_nodes.json \
+  --addnode 203.0.113.10:8333
+```
+
+The node reads **INI** (`ConfigParser`). `configs/mainnet_seeds.toml` is now INI-compatible and can be copied directly, but you must replace example seed hosts with real reachable hosts before production.
+Note: DNS seeding is disabled by default in `configs/mainnet.toml` to avoid silent startup with placeholder peers. Enable `dnsseed = true` only after setting real `dnsseeds`, or provide a valid `bootstrap_nodes.json` in your datadir.
+
+```bash
+# 1. Example: use a seed profile and then replace dnsseeds with your real hosts
+cp configs/mainnet_seeds.toml ~/.berzcoin/berzcoin.conf
 
 # 2. Start (foreground example; use your process manager for production)
 berzcoind -datadir ~/.berzcoin -conf ~/.berzcoin/berzcoin.conf

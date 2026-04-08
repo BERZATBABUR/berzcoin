@@ -134,7 +134,13 @@ class Config:
     def load(self, config_path: str) -> bool:
         try:
             parser = configparser.ConfigParser()
-            parser.read(config_path)
+            with open(config_path, "r", encoding="utf-8") as f:
+                raw = f.read()
+            try:
+                parser.read_string(raw)
+            except configparser.MissingSectionHeaderError:
+                # Accept legacy sectionless files by treating them as [main].
+                parser.read_string("[main]\n" + raw)
             for section in parser.sections():
                 for key, value in parser.items(section):
                     if key == "listen":
@@ -310,7 +316,29 @@ class Config:
         nodes = data.get("bootstrap_nodes", [])
         if not isinstance(nodes, list):
             return []
-        return [str(x).strip() for x in nodes if str(x).strip()]
+
+        parsed: List[str] = []
+        for item in nodes:
+            if isinstance(item, dict):
+                address = str(item.get("address", "")).strip()
+                if not address:
+                    continue
+                port_raw = item.get("port")
+                if port_raw is None:
+                    parsed.append(address)
+                    continue
+                try:
+                    port = int(port_raw)
+                except (TypeError, ValueError):
+                    parsed.append(address)
+                    continue
+                parsed.append(f"{address}:{port}")
+                continue
+
+            text = str(item).strip()
+            if text:
+                parsed.append(text)
+        return parsed
 
     def get_dns_seed_hosts(self) -> List[str]:
         """Configured DNS seeds, or network-profile defaults when enabled."""

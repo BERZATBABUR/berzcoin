@@ -7,7 +7,6 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PYTHONPATH="${REPO_ROOT}"
 
 DATADIR="${HOME}/.berzcoin"
-CONFIG_FILE="${DATADIR}/berzcoin.conf"
 NETWORK="mainnet"
 RPC_PORT=8332
 P2P_PORT=8333
@@ -49,12 +48,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+CONFIG_FILE="${DATADIR}/berzcoin.conf"
 mkdir -p "${DATADIR}"
 
 if [[ ! -f "${CONFIG_FILE}" ]]; then
     RPC_PASS="$(openssl rand -hex 32)"
     cat > "${CONFIG_FILE}" << EOF
-# BerzCoin configuration
+[main]
 network=${NETWORK}
 datadir=${DATADIR}
 port=${P2P_PORT}
@@ -62,6 +62,8 @@ rpcbind=127.0.0.1
 rpcport=${RPC_PORT}
 rpcuser=berzcoin
 rpcpassword=${RPC_PASS}
+dnsseed=false
+allow_missing_bootstrap=true
 EOF
     chmod 600 "${CONFIG_FILE}"
     echo "Created config file: ${CONFIG_FILE}"

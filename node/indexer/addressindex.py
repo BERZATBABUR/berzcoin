@@ -209,15 +209,17 @@ class AddressIndex:
             FROM tx_outputs o
             JOIN tx_index tx ON o.txid = tx.txid
             WHERE o.address = ? AND o.spent = 0
+            AND NOT EXISTS (
+                SELECT 1 FROM tx_inputs i
+                WHERE i.prev_txid = o.txid AND i.prev_vout = o.output_index
+            )
             ORDER BY o.value ASC
             """,
             (address,),
         )
         utxos: List[Dict[str, Any]] = []
         for row in results:
-            confirmations = (
-                best_height - row["height"] + 1 if best_height > 0 else 0
-            )
+            confirmations = best_height - row["height"] + 1 if best_height >= row["height"] else 0
             if confirmations >= min_conf:
                 utxos.append(
                     {
@@ -312,6 +314,54 @@ class AddressIndex:
             )
 
         logger.info("Reindexed address %s...", address[:16])
+
+    def rebuild_from_tx_index(self) -> None:
+        """Rebuild address index tables from canonical tx_index/tx_inputs/tx_outputs tables."""
+        now = int(time.time())
+        with self.db.transaction():
+            self.db.execute("DELETE FROM address_txs")
+            self.db.execute("DELETE FROM address_balance")
+
+            self.db.execute(
+                """
+                INSERT INTO address_txs
+                (address, txid, height, block_time, block_tx_index, is_input, is_output, io_index, value)
+                SELECT o.address, o.txid, t.height, t.block_time, t.block_tx_index,
+                       0, 1, o.output_index, o.value
+                FROM tx_outputs o
+                JOIN tx_index t ON t.txid = o.txid
+                WHERE o.address IS NOT NULL AND o.address != ''
+                """
+            )
+
+            self.db.execute(
+                """
+                INSERT INTO address_txs
+                (address, txid, height, block_time, block_tx_index, is_input, is_output, io_index, value)
+                SELECT o.address, i.txid, t.height, t.block_time, t.block_tx_index,
+                       1, 0, i.input_index, COALESCE(o.value, 0)
+                FROM tx_inputs i
+                JOIN tx_index t ON t.txid = i.txid
+                JOIN tx_outputs o
+                  ON o.txid = i.prev_txid AND o.output_index = i.prev_vout
+                WHERE o.address IS NOT NULL AND o.address != ''
+                """
+            )
+
+            self.db.execute(
+                """
+                INSERT INTO address_balance (address, balance, unconfirmed_balance, updated_at)
+                SELECT
+                    address,
+                    COALESCE(SUM(CASE WHEN is_output = 1 THEN value ELSE -value END), 0) AS balance,
+                    0,
+                    ?
+                FROM address_txs
+                GROUP BY address
+                """,
+                (now,),
+            )
+        self._cache.clear()
 
     def _update_cache(self, address: str, info: Dict[str, Any]) -> None:
         self._cache[address] = info

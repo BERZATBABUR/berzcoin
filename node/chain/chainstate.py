@@ -1,5 +1,7 @@
 """Active chain state management."""
 
+import json
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from shared.core.block import Block, BlockHeader
 from shared.core.transaction import Transaction
@@ -63,21 +65,137 @@ class ChainState:
         self.block_index.load()
         self._best_height = self.block_index.get_best_height()
         self._best_hash = self.block_index.get_best_hash()
-        if self._best_height < 0 and self.params.get_network_name() == "regtest":
-            logger.info(
-                "Empty regtest datadir detected; importing a synthetic genesis block"
-            )
-            self._import_synthetic_genesis_for_regtest()
-            self.block_index.clear()
-            self.block_index.load()
-            self._best_height = self.block_index.get_best_height()
-            self._best_hash = self.block_index.get_best_hash()
+        if self._best_height < 0:
+            network = self.params.get_network_name()
+            if network == "regtest":
+                logger.info(
+                    "Empty regtest datadir detected; importing a synthetic genesis block"
+                )
+                self._import_synthetic_genesis_for_regtest()
+            elif network in ("mainnet", "testnet"):
+                logger.info(
+                    "Empty %s datadir detected; importing canonical genesis header anchor",
+                    network,
+                )
+                self._import_genesis_header_anchor(network)
+            else:
+                raise RuntimeError(f"Unsupported network for genesis bootstrap: {network}")
+            self._reload_best_from_index()
         if self._best_hash:
             entry = self.block_index.get_block(self._best_hash)
             if entry:
                 self._best_chainwork = entry.chainwork
         self.refresh_versionbits_state()
         logger.info(f"Chain state initialized: height={self._best_height}, work={self._best_chainwork}")
+
+    def _reload_best_from_index(self) -> None:
+        """Reload block index from DB and refresh in-memory best-tip pointers."""
+        self.block_index.clear()
+        self.block_index.load()
+        self._best_height = self.block_index.get_best_height()
+        self._best_hash = self.block_index.get_best_hash()
+
+    def _genesis_metadata_path(self, network: str) -> Path:
+        repo_root = Path(__file__).resolve().parents[2]
+        return repo_root / "genesis" / f"{network}_genesis.json"
+
+    @staticmethod
+    def _parse_bits_value(raw: Any) -> int:
+        if isinstance(raw, int):
+            return int(raw)
+        value = str(raw or "").strip().lower()
+        if not value:
+            raise ValueError("missing bits")
+        if value.startswith("0x"):
+            return int(value, 16)
+        return int(value, 10)
+
+    def _load_and_validate_genesis_metadata(self, network: str) -> Dict[str, Any]:
+        metadata_path = self._genesis_metadata_path(network)
+        if not metadata_path.exists():
+            raise RuntimeError(
+                f"Missing genesis metadata file for {network}: {metadata_path}"
+            )
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to parse genesis metadata for {network}: {metadata_path}: {e}"
+            ) from e
+
+        if not isinstance(metadata, dict):
+            raise RuntimeError(
+                f"Invalid genesis metadata format for {network}: expected object in {metadata_path}"
+            )
+
+        expected = {
+            "network": network,
+            "version": int(self.params.genesis_version),
+            "prev_block_hash": "00" * 32,
+            "merkle_root": str(self.params.genesis_merkle_root).lower(),
+            "timestamp": int(self.params.genesis_time),
+            "bits": int(self.params.genesis_bits),
+            "nonce": int(self.params.genesis_nonce),
+            "hash": str(self.params.genesis_block_hash).lower(),
+        }
+
+        try:
+            got = {
+                "network": str(metadata.get("network", "")).strip().lower(),
+                "version": int(metadata.get("version")),
+                "prev_block_hash": str(metadata.get("prev_block_hash", "")).strip().lower(),
+                "merkle_root": str(metadata.get("merkle_root", "")).strip().lower(),
+                "timestamp": int(metadata.get("timestamp")),
+                "bits": self._parse_bits_value(metadata.get("bits")),
+                "nonce": int(metadata.get("nonce")),
+                "hash": str(metadata.get("hash", "")).strip().lower(),
+            }
+        except Exception as e:
+            raise RuntimeError(
+                f"Invalid genesis metadata fields for {network} ({metadata_path}): {e}"
+            ) from e
+
+        mismatches: List[str] = []
+        for key, expected_value in expected.items():
+            if got[key] != expected_value:
+                mismatches.append(
+                    f"{key}: expected={expected_value} got={got[key]}"
+                )
+        if mismatches:
+            joined = "; ".join(mismatches)
+            raise RuntimeError(
+                f"Genesis metadata mismatch for {network} ({metadata_path}): {joined}"
+            )
+        return got
+
+    def _import_genesis_header_anchor(self, network: str) -> None:
+        """Persist canonical genesis header metadata as height-0 anchor."""
+        md = self._load_and_validate_genesis_metadata(network)
+        header = BlockHeader(
+            version=int(md["version"]),
+            prev_block_hash=bytes.fromhex(str(md["prev_block_hash"])),
+            merkle_root=bytes.fromhex(str(md["merkle_root"])),
+            timestamp=int(md["timestamp"]),
+            bits=int(md["bits"]),
+            nonce=int(md["nonce"]),
+        )
+
+        if header.hash_hex().lower() != str(md["hash"]).lower():
+            raise RuntimeError(
+                f"Genesis header hash mismatch for {network}: "
+                f"computed={header.hash_hex().lower()} expected={str(md['hash']).lower()}"
+            )
+
+        # Validate basic header PoW/timestamp semantics before persisting.
+        self.rules.validate_block_header(header, prev_header=None)
+
+        chainwork = int(self.chainwork.calculate_chain_work([header]))
+        self.header_chain.add_header(header, 0, chainwork)
+        logger.info(
+            "Canonical %s genesis header anchor imported at height 0 (%s)",
+            network,
+            header.hash_hex()[:16],
+        )
 
     def _import_synthetic_genesis_for_regtest(self) -> None:
         """Insert a minimal genesis block so mining works on a fresh regtest datadir.
