@@ -25,6 +25,7 @@ packaging = [
 ]
 
 [project.scripts]
+berzcoin = "cli.launcher:main"
 berzcoind = "node.app.main:main"
 berzcoin-cli = "cli.main:main"
 berzcoin-wallet = "cli.wallet_standalone:main"

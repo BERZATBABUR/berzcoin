@@ -1,0 +1,85 @@
+{
+  "saved_at": 1778337324,
+  "scores": {
+    "127.0.0.1:48252": {
+      "score": 10,
+      "last_seen": 1778336911.5083506,
+      "last_connected": 1778336911.5083487,
+      "failures": 0,
+      "successes": 1,
+      "bans": 0
+    },
+    "127.0.0.1:48254": {
+      "score": 10,
+      "last_seen": 1778336911.5350509,
+      "last_connected": 1778336911.535049,
+      "failures": 0,
+      "successes": 1,
+      "bans": 0
+    },
+    "127.0.0.1:57528": {
+      "score": 10,
+      "last_seen": 1778337009.2688196,
+      "last_connected": 1778337009.2688181,
+      "failures": 0,
+      "successes": 1,
+      "bans": 0
+    },
+    "127.0.0.1:57530": {
+      "score": 10,
+      "last_seen": 1778337009.2691286,
+      "last_connected": 1778337009.2691267,
+      "failures": 0,
+      "successes": 1,
+      "bans": 0
+    },
+    "127.0.0.1:49840": {
+      "score": 10,
+      "last_seen": 1778337157.5744236,
+      "last_connected": 1778337157.5744221,
+      "failures": 0,
+      "successes": 1,
+      "bans": 0
+    },
+    "127.0.0.1:49854": {
+      "score": 10,
+      "last_seen": 1778337157.574799,
+      "last_connected": 1778337157.5747976,
+      "failures": 0,
+      "successes": 1,
+      "bans": 0
+    },
+    "127.0.0.1:57938": {
+      "score": 10,
+      "last_seen": 1778337265.6597517,
+      "last_connected": 1778337265.6597505,
+      "failures": 0,
+      "successes": 1,
+      "bans": 0
+    },
+    "127.0.0.1:57944": {
+      "score": 10,
+      "last_seen": 1778337265.6600826,
+      "last_connected": 1778337265.6600811,
+      "failures": 0,
+      "successes": 1,
+      "bans": 0
+    },
+    "127.0.0.1:45154": {
+      "score": 10,
+      "last_seen": 1778337324.5729992,
+      "last_connected": 1778337324.5729978,
+      "failures": 0,
+      "successes": 1,
+      "bans": 0
+    },
+    "127.0.0.1:45168": {
+      "score": 10,
+      "last_seen": 1778337324.5778959,
+      "last_connected": 1778337324.577893,
+      "failures": 0,
+      "successes": 1,
+      "bans": 0
+    }
+  }
+}

@@ -1,0 +1,476 @@
+<frozen runpy>:128: RuntimeWarning: 'node.app.main' found in sys.modules after import of package 'node.app', but prior to execution of 'node.app.main'; this may result in unpredictable behaviour
+2026-05-09 17:35:24 - berzcoin - INFO - Loaded configuration from /home/berzat-babur/Desktop/berzcoin/data/local3nodes/node1/berzcoin.conf
+2026-05-09 17:35:24 - berzcoin - INFO - Initializing BerzCoin node...
+2026-05-09 17:35:24 - berzcoin - INFO - Connected to database: /home/berzat-babur/Desktop/berzcoin/data/local3nodes/node1/regtest.db
+2026-05-09 17:35:24 - berzcoin - INFO - Current version: 0, Target version: 7
+2026-05-09 17:35:24 - berzcoin - INFO - Applying migration 1: Initial schema
+2026-05-09 17:35:24 - berzcoin - INFO - Applying migration 2: Add address indexes
+2026-05-09 17:35:24 - berzcoin - INFO - Applying migration 3: Add chainwork to block_headers
+2026-05-09 17:35:24 - berzcoin - INFO - Applying migration 4: Add witness data to inputs
+2026-05-09 17:35:24 - berzcoin - INFO - Applying migration 5: Add transaction weight
+2026-05-09 17:35:24 - berzcoin - INFO - Applying migration 6: Transaction index tables (tx_index, tx_inputs, tx_outputs)
+2026-05-09 17:35:24 - berzcoin - INFO - Applying migration 7: Allow non-unique block heights for fork branch persistence
+2026-05-09 17:35:24 - berzcoin - INFO - Migration complete. Now at version 7
+2026-05-09 17:35:24 - berzcoin - INFO - Loaded 0 blocks from index
+2026-05-09 17:35:24 - berzcoin - INFO - Empty regtest datadir detected; importing a synthetic genesis block
+2026-05-09 17:35:24 - berzcoin - INFO - Synthetic regtest genesis written at height 0 (5dd3bbe7666038a9)
+2026-05-09 17:35:24 - berzcoin - INFO - Loaded 1 blocks from index
+2026-05-09 17:35:24 - berzcoin - INFO - Chain state initialized: height=0, work=0
+2026-05-09 17:35:24 - berzcoin - INFO - Mempool snapshot tip mismatch (snapshot=fdc1b1bcdea8502b@103 current=5dd3bbe7666038a9@0); full revalidation on restore
+2026-05-09 17:35:24 - berzcoin - INFO - Mempool restore complete: restored=0 dropped={}
+2026-05-09 17:35:24 - berzcoin - INFO - Peer discovery sources priority: connect=0 addnode=0 bootstrap=0 dns=0
+2026-05-09 17:35:24 - berzcoin - WARNING - Using insecure fallback wallet encryption passphrase; set wallet_encryption_passphrase
+2026-05-09 17:35:24 - berzcoin - INFO - Loaded existing RPC cookie from /home/berzat-babur/Desktop/berzcoin/data/local3nodes/node1/.cookie
+2026-05-09 17:35:24 - berzcoin - INFO - Node initialized successfully
+2026-05-09 17:35:24 - berzcoin - INFO - Starting BerzCoin node...
+2026-05-09 17:35:24 - berzcoin - INFO - P2P listener started on 0.0.0.0:8331
+2026-05-09 17:35:24 - berzcoin - INFO - Connection manager started
+2026-05-09 17:35:24 - berzcoin - INFO - RPC server started on http://127.0.0.1:18431
+2026-05-09 17:35:24 - berzcoin - INFO - Node started
+2026-05-09 17:35:24 - berzcoin - INFO - Starting block sync loop
+2026-05-09 17:35:24 - berzcoin - INFO - Peer version: 70015, user agent: /BerzCoin:1.0/, height: 0
+2026-05-09 17:35:24 - berzcoin - INFO - Handshake complete with 127.0.0.1
+2026-05-09 17:35:24 - berzcoin - INFO - Inbound connection from 127.0.0.1:45154
+2026-05-09 17:35:24 - berzcoin - INFO - Peer version: 70015, user agent: /BerzCoin:1.0/, height: 0
+2026-05-09 17:35:24 - berzcoin - INFO - Handshake complete with 127.0.0.1
+2026-05-09 17:35:24 - berzcoin - INFO - Inbound connection from 127.0.0.1:45168
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: e4ffbf26c77edc7c at height 1
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 1: e4ffbf26c77edc7c
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: b5b1443b99c9dd12 at height 2
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 2: b5b1443b99c9dd12
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: f5e160d20d62fdcd at height 3
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 3: f5e160d20d62fdcd
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 3, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: b5c932bd19301007 at height 4
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 4: b5c932bd19301007
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 2, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 98a5fc0a40079999 at height 5
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 5: 98a5fc0a40079999
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 6a11b86c80262ea7 at height 6
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 6: 6a11b86c80262ea7
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: fead7dafc993f431 at height 7
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 7: fead7dafc993f431
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 0f0943cca3a30788 at height 8
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 8: 0f0943cca3a30788
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 560a4b6499de3be9 at height 9
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 9: 560a4b6499de3be9
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: ecf080c85c1404ff at height 10
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 10: ecf080c85c1404ff
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 266e45213b336230 at height 11
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 11: 266e45213b336230
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: cebcf1e700ed04fb at height 12
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 12: cebcf1e700ed04fb
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: dcdb2c4cad9c1b3a at height 13
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 13: dcdb2c4cad9c1b3a
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 2d5faa2c77b89e23 at height 14
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 14: 2d5faa2c77b89e23
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 5103a0a18fad51bc at height 15
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 15: 5103a0a18fad51bc
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 2, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 2d17c0c783626641 at height 16
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 16: 2d17c0c783626641
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 34294a57de6730d5 at height 17
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 17: 34294a57de6730d5
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: a6d22aee05ae800d at height 18
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 18: a6d22aee05ae800d
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: b10ca14c0865ff84 at height 19
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 19: b10ca14c0865ff84
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: c0ad1509f1c8b202 at height 20
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 20: c0ad1509f1c8b202
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: bcbe1571cbfcc4bf at height 21
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 21: bcbe1571cbfcc4bf
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: e64791d95196f7a5 at height 22
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 22: e64791d95196f7a5
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 165cb6a392f370a2 at height 23
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 23: 165cb6a392f370a2
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 0b7d22cff0b14ac3 at height 24
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 24: 0b7d22cff0b14ac3
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: f3ca51189d837817 at height 25
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 25: f3ca51189d837817
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 5c498c7831573f6a at height 26
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 26: 5c498c7831573f6a
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: f7e613dd5d37e877 at height 27
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 27: f7e613dd5d37e877
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: dc7a28efee0e9874 at height 28
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 28: dc7a28efee0e9874
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 2dbbd3b349a408d7 at height 29
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 29: 2dbbd3b349a408d7
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: bf850223efae554e at height 30
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 30: bf850223efae554e
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: f6ec9398c209462a at height 31
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 31: f6ec9398c209462a
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 3, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: ed153796b1b2dcf9 at height 32
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 32: ed153796b1b2dcf9
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: c02d65bbbfac8c16 at height 33
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 33: c02d65bbbfac8c16
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 21c51981635626f7 at height 34
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 34: 21c51981635626f7
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 17eef8116b09e5f1 at height 35
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 35: 17eef8116b09e5f1
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 3, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: d00dcb318b9a595a at height 36
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 36: d00dcb318b9a595a
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: ad62d07bb3a95106 at height 37
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 37: ad62d07bb3a95106
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 6, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 61b5e3cc24152ca7 at height 38
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 38: 61b5e3cc24152ca7
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 4, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 33d28e461b754428 at height 39
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 39: 33d28e461b754428
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 5bfd6ddd24ce7b88 at height 40
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 40: 5bfd6ddd24ce7b88
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 2, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: f161b5bdea7e961e at height 41
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 41: f161b5bdea7e961e
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 00779931de577115 at height 42
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 42: 00779931de577115
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 2, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 8e9724102ea1dd09 at height 43
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 43: 8e9724102ea1dd09
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 2e5ca8b37afd03a4 at height 44
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 44: 2e5ca8b37afd03a4
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 2, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: ae8a728938d16584 at height 45
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 45: ae8a728938d16584
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 3599ee5143fb043d at height 46
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 46: 3599ee5143fb043d
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: fad2492022874e2a at height 47
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 47: fad2492022874e2a
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: e8d45db6a6e3e44d at height 48
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 48: e8d45db6a6e3e44d
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 93423687db5bd4be at height 49
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 49: 93423687db5bd4be
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 925e8721515c0296 at height 50
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 50: 925e8721515c0296
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 92167fd5a1483d98 at height 51
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 51: 92167fd5a1483d98
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: a654815acfe4b5d9 at height 52
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 52: a654815acfe4b5d9
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 3, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: dbd6a257b6f9b51e at height 53
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 53: dbd6a257b6f9b51e
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 3, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: eee2419c8c589525 at height 54
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 54: eee2419c8c589525
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 8546c0b903ace0a5 at height 55
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 55: 8546c0b903ace0a5
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 43ba9e2d88f27cc5 at height 56
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 56: 43ba9e2d88f27cc5
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 891ce48aee4d729e at height 57
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 57: 891ce48aee4d729e
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: f390d1f6573d2d71 at height 58
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 58: f390d1f6573d2d71
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 2, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 0014aa41495a030f at height 59
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 59: 0014aa41495a030f
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 3c2b4c08cd7ba259 at height 60
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 60: 3c2b4c08cd7ba259
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 2054ab944d3a80f0 at height 61
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 61: 2054ab944d3a80f0
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 2, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 5af181ec82da7509 at height 62
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 62: 5af181ec82da7509
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 6, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 651dbf2b29c224d7 at height 63
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 63: 651dbf2b29c224d7
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 8ab25e33597004f0 at height 64
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 64: 8ab25e33597004f0
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 29fe637afbf4e2fc at height 65
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 65: 29fe637afbf4e2fc
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 43872da795185d4d at height 66
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 66: 43872da795185d4d
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: f00e5601dd1a69c2 at height 67
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 67: f00e5601dd1a69c2
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 777f12b7074930c3 at height 68
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 68: 777f12b7074930c3
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: d8354b8949e84dd3 at height 69
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 69: d8354b8949e84dd3
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 69a4bbdd2e6bb72a at height 70
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 70: 69a4bbdd2e6bb72a
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: d1e18f06d38c25f7 at height 71
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 71: d1e18f06d38c25f7
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: e5a263b78c45513d at height 72
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 72: e5a263b78c45513d
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: e868183e05d31e49 at height 73
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 73: e868183e05d31e49
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: eb7c950594b0e0b0 at height 74
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 74: eb7c950594b0e0b0
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 394bc0884c8a96dd at height 75
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 75: 394bc0884c8a96dd
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 30790ed3fcea287d at height 76
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 76: 30790ed3fcea287d
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 3, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: a379810178b1e398 at height 77
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 77: a379810178b1e398
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: f815e1e4a7f17594 at height 78
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 78: f815e1e4a7f17594
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 4dc2ee64bfcefce1 at height 79
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 79: 4dc2ee64bfcefce1
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 9b97e513c288b6f0 at height 80
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 80: 9b97e513c288b6f0
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 630f791b21911269 at height 81
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 81: 630f791b21911269
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: eff33f8c48e6c4d6 at height 82
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 82: eff33f8c48e6c4d6
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: c49d7e123b24e56d at height 83
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 83: c49d7e123b24e56d
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 2, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: d337f2eff34d9917 at height 84
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 84: d337f2eff34d9917
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: a8a3dfc228250866 at height 85
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 85: a8a3dfc228250866
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: f3fb4363e538debd at height 86
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 86: f3fb4363e538debd
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: f3a069011f0f4865 at height 87
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 87: f3a069011f0f4865
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 9c3883b9ada0fe6a at height 88
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 88: 9c3883b9ada0fe6a
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 9b97d64efea38077 at height 89
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 89: 9b97d64efea38077
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 697241a7147106c0 at height 90
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 90: 697241a7147106c0
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 1, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: addc100670eb2f5e at height 91
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 91: addc100670eb2f5e
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 2, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: 7b86df9438739965 at height 92
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 92: 7b86df9438739965
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: ae99ac6b30fe9a20 at height 93
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 93: ae99ac6b30fe9a20
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: f68785b4aa32edc6 at height 94
+2026-05-09 17:35:25 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:25 - berzcoin - INFO - Generated block 94: f68785b4aa32edc6
+2026-05-09 17:35:25 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:25 - berzcoin - INFO - New best block: bf97618e57813231 at height 95
+2026-05-09 17:35:26 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:26 - berzcoin - INFO - Generated block 95: bf97618e57813231
+2026-05-09 17:35:26 - berzcoin - INFO - Block found! Nonce: 2, Time: 0.00s
+2026-05-09 17:35:26 - berzcoin - INFO - New best block: 15b56dcd628e55ba at height 96
+2026-05-09 17:35:26 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:26 - berzcoin - INFO - Generated block 96: 15b56dcd628e55ba
+2026-05-09 17:35:26 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:26 - berzcoin - INFO - New best block: 828bb9ab0e28f4ec at height 97
+2026-05-09 17:35:26 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:26 - berzcoin - INFO - Generated block 97: 828bb9ab0e28f4ec
+2026-05-09 17:35:26 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:26 - berzcoin - INFO - New best block: fb75693774e2d488 at height 98
+2026-05-09 17:35:26 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:26 - berzcoin - INFO - Generated block 98: fb75693774e2d488
+2026-05-09 17:35:26 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:26 - berzcoin - INFO - New best block: 062b0c8c9369a0ed at height 99
+2026-05-09 17:35:26 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:26 - berzcoin - INFO - Generated block 99: 062b0c8c9369a0ed
+2026-05-09 17:35:26 - berzcoin - INFO - Block found! Nonce: 3, Time: 0.00s
+2026-05-09 17:35:26 - berzcoin - INFO - New best block: 45d037e8d0c043b9 at height 100
+2026-05-09 17:35:26 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:26 - berzcoin - INFO - Generated block 100: 45d037e8d0c043b9
+2026-05-09 17:35:26 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:26 - berzcoin - INFO - New best block: aeb42c74bc8ab6f3 at height 101
+2026-05-09 17:35:26 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:26 - berzcoin - INFO - Generated block 101: aeb42c74bc8ab6f3
+2026-05-09 17:35:26 - berzcoin - INFO - Block found! Nonce: 6, Time: 0.00s
+2026-05-09 17:35:26 - berzcoin - INFO - New best block: 3715bb361224539d at height 102
+2026-05-09 17:35:26 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:26 - berzcoin - INFO - Generated block 102: 3715bb361224539d
+2026-05-09 17:35:26 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:26 - berzcoin - INFO - New best block: 337b8df2ffd5d373 at height 103
+2026-05-09 17:35:26 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:26 - berzcoin - INFO - Generated block 103: 337b8df2ffd5d373
+2026-05-09 17:35:26 - berzcoin - INFO - Block found! Nonce: 0, Time: 0.00s
+2026-05-09 17:35:26 - berzcoin - INFO - New best block: 8dd63840de345d82 at height 104
+2026-05-09 17:35:26 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:26 - berzcoin - INFO - Generated block 104: 8dd63840de345d82
+2026-05-09 17:35:27 - berzcoin - INFO - Added transaction d0f4fdc44ef336d0 to mempool (fee: 970 sat, size: 225)
+2026-05-09 17:35:27 - berzcoin - INFO - Block found! Nonce: 7, Time: 0.00s
+2026-05-09 17:35:27 - berzcoin - INFO - New best block: 71fc48632a94a5be at height 105
+2026-05-09 17:35:27 - berzcoin - INFO - Block broadcast to 2 peers
+2026-05-09 17:35:27 - berzcoin - INFO - Generated block 105: 71fc48632a94a5be
+2026-05-09 17:35:27 - berzcoin - INFO - Added transaction ee567195e8199d33 to mempool (fee: 970 sat, size: 226)
+2026-05-09 17:35:28 - berzcoin - INFO - Stopping node via RPC...
+2026-05-09 17:35:29 - berzcoin - INFO - Stopping BerzCoin node...
+2026-05-09 17:35:29 - berzcoin - INFO - Mining stopped
+2026-05-09 17:35:29 - berzcoin - INFO - RPC server stopped
+2026-05-09 17:35:29 - berzcoin - INFO - Peer disconnected: 127.0.0.1:45154
+2026-05-09 17:35:29 - berzcoin - INFO - Disconnected from 127.0.0.1:45154
+2026-05-09 17:35:29 - berzcoin - INFO - Peer disconnected: 127.0.0.1:45168
+2026-05-09 17:35:29 - berzcoin - INFO - Disconnected from 127.0.0.1:45168
+2026-05-09 17:35:29 - berzcoin - INFO - Connection manager stopped
+2026-05-09 17:35:29 - berzcoin - INFO - Saved 1 transactions to mempool.dat
+2026-05-09 17:35:29 - berzcoin - INFO - Database connection closed
+2026-05-09 17:35:29 - berzcoin - INFO - Node stopped
+2026-05-09 17:35:29 - berzcoin - INFO - Stopping BerzCoin node...
+2026-05-09 17:35:29 - berzcoin - INFO - Mining stopped
+2026-05-09 17:35:29 - berzcoin - INFO - RPC server stopped
+2026-05-09 17:35:29 - berzcoin - INFO - Connection manager stopped
+2026-05-09 17:35:29 - berzcoin - INFO - Saved 1 transactions to mempool.dat
+2026-05-09 17:35:29 - berzcoin - INFO - Node stopped

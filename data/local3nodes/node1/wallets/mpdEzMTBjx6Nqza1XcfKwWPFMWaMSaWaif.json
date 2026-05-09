@@ -1,0 +1,16 @@
+{
+  "format": "berzcoin.wallet.encrypted.v1",
+  "cipher": {
+    "name": "aes-256-gcm",
+    "nonce_b64": "EKEpA90EC3OvnDLt"
+  },
+  "kdf": {
+    "name": "scrypt",
+    "salt_b64": "DLdkuGYKghXEnopsh8x92g==",
+    "n": 16384,
+    "r": 8,
+    "p": 1,
+    "dklen": 32
+  },
+  "ciphertext_b64": "zOJrwe+aa+Ib2qQuIVg/pXqtmTX/LIGnOdv5Zx/HFO0j/PcxXtuAdTPvb6mrqAVxMUj9jpvyUueFOApYPigx5RsiNvt8agSKwhme7dgjwLpwDRXxuDjGcz2nuQHaJCQZ88jsXSH9Pw/Fm8Fza2RV4ZInfGgiu489wfvD/66KI4CfOXfFBTECKXXclB491YSruReWJ0zZmzPxWum8xAG07dzLPRULfVm97V9ZqBa2zS7Qom34fTKlXQyil92XgQjXbRyO5b2qWk6uNdapX+vLq2hzuT5P2LfM5qGc6oNIGVo7ANAzyqpnhqNW92CD1QSxNbDHvWLpRL5I0b+om8dYC/sSHguijH+9l2jlHyLcRI/TdiQErmNcM2PTXm+AI1EAtE0ShBxSLbPfP4gKs/oso/7Z2Iet2T+kyFYyWSfiV6Qwxc5w3N6MNfaM+GUCg/xS6kOKMIr3NxBgF/Hdtxb/JREN7IlAXQo+8v4XHbFUSUQpa7kPvzgcRXw4aOtA7nwiiGAGrUOXPV7j1Vr2BP1I9R/uykzRIQUvvpFZpIHyJ0kdp5xF44oSk+YdNx4fFiF5YdAGISY/NBbyHla8oJHFee4rWmsebKlknXAtkZd+tWQqWCTVxms0DY+8qFYvD1uAmdupx12nnv7JcMewTSR/1SQl98vEDZT2HD38/fjhFwKHEseRnZPE39HqOjQF016VMkS+d2pcwQ7w4yAeFPnzHLjBWrPtCVE2Cxj+RTEt1dHiTUngf5kCUGesMgGn1Abx7hBa66eCBtFX3RLe3lMb62lFfg0sj1jPNck8XoYQ4sueT/jvpVrrE5Eg1Md60NVfmSBN2VJ5IAvRNugNX48wyUmjayPbfTYWjanVXr4xZWIv3i5MGse7abZMFtUtP4xaioUmJjopc845"
+}

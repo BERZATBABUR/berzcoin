@@ -1,0 +1,10 @@
+[node]
+network = "regtest"
+port = 8333
+data_dir = "data/node1"
+
+[p2p]
+peers = [
+  "127.0.0.1:8332",
+  "127.0.0.1:8331",
+]

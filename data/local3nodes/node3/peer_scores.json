@@ -1,0 +1,13 @@
+{
+  "saved_at": 1778337324,
+  "scores": {
+    "127.0.0.1:8331": {
+      "score": 50,
+      "last_seen": 1778337324.5778792,
+      "last_connected": 1778337324.5778773,
+      "failures": 0,
+      "successes": 5,
+      "bans": 0
+    }
+  }
+}
