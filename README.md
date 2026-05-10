@@ -18,6 +18,34 @@ python3 -m node.app.main -datadir ~/.berzcoin
 
 Or install in editable mode: `pip install -e ".[dev]"` then run `berzcoind -datadir ~/.berzcoin`.
 
+Bootstrap dependencies + editable install in one command:
+
+```bash
+scripts/setup.sh
+```
+
+Auto-growing peer discovery (register + auto-join):
+
+1. Start a lightweight seed registry service on a stable machine:
+
+```bash
+python3 scripts/seed_registry_server.py --host 0.0.0.0 --port 8787
+```
+
+2. Each node joins by registering itself and fetching known peers:
+
+```bash
+python3 -m cli.launcher node start \
+  --network mainnet \
+  --port 8333 \
+  --data-dir ~/.berzcoin_mainnet \
+  --auto-discover \
+  --self-ip <THIS_NODE_IP> \
+  --seed-registry http://<REGISTRY_IP>:8787
+```
+
+The first node registers itself; later nodes auto-register and receive peers from the growing registry list.
+
 ## Tests
 
 ```bash
