@@ -1131,6 +1131,11 @@ class ConnectionManager:
         worst = self._select_outbound_eviction_candidate()
         if not worst:
             return
+        now = asyncio.get_event_loop().time()
+        connected_at = float(getattr(worst, "connected_at", 0.0) or 0.0)
+        # Do not evict a freshly connected peer solely due to stale historical score.
+        if connected_at > 0 and (now - connected_at) < 120.0:
+            return
         try:
             await worst.disconnect()
             self.peer_scores.record_bad(worst.address, "stale_peer")

@@ -36,8 +36,8 @@ class PeerScore:
     def record_success(self) -> None:
         self.successes += 1
         self.last_connected = time.time()
-        # Gradually forgive failed attempts on successful contact.
-        self.failures = max(0, self.failures - 1)
+        # A successful full connection should clear transient failure history.
+        self.failures = 0
         self.add_score(10)
 
     def record_failure(self, reason: str) -> None:
