@@ -128,7 +128,12 @@ class MessageCodec:
             Tuple of (command, payload, bytes consumed)
         """
         header, consumed = MessageHeader.deserialize(data, self.network)
-        return header.command, header.payload, consumed
+        command = header.command
+        if isinstance(command, (bytes, bytearray)):
+            command = bytes(command).decode("ascii", errors="replace").rstrip("\x00")
+        else:
+            command = str(command).rstrip("\x00")
+        return command, header.payload, consumed
 
     def encode_version(self, version: int, services: int, timestamp: int,
                        addr_recv_services: int, addr_recv_ip: bytes, addr_recv_port: int,
