@@ -52,6 +52,11 @@ class BerzCoinCLI:
             help="Required safety flag for starter launch",
         )
         p.add_argument(
+            "--join",
+            metavar="IP:PORT",
+            help="Join a starter peer while launching local node + interface",
+        )
+        p.add_argument(
             "--web-port",
             type=int,
             default=8080,
@@ -169,8 +174,13 @@ class BerzCoinCLI:
         return any(m in text for m in markers)
 
     def _run_start_mainnet(self, args: argparse.Namespace) -> int:
-        if not bool(getattr(args, "starter", False)):
-            print("Error: start-mainnet requires --starter", file=sys.stderr)
+        starter_mode = bool(getattr(args, "starter", False))
+        join_target = str(getattr(args, "join", "") or "").strip()
+        if not starter_mode and not join_target:
+            print("Error: start-mainnet requires either --starter or --join IP:PORT", file=sys.stderr)
+            return 2
+        if starter_mode and join_target:
+            print("Error: use either --starter or --join, not both", file=sys.stderr)
             return 2
 
         datadir = os.path.expanduser(
@@ -215,6 +225,10 @@ class BerzCoinCLI:
         print(f"  p2p:     {p2p_bind}:{p2p_port}")
         print(f"  rpc:     {rpc_bind}:{rpc_port}")
         print(f"  web:     127.0.0.1:{web_port}")
+        if join_target:
+            print(f"  join:    {join_target}")
+        else:
+            print("  role:    starter")
 
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         launcher = os.path.join(repo_root, "scripts", "run_mainnet_interface.sh")
@@ -229,6 +243,10 @@ class BerzCoinCLI:
             "--web-port",
             str(web_port),
         ]
+        if starter_mode:
+            cmd.append("--starter")
+        if join_target:
+            cmd.extend(["--join", join_target])
         env = os.environ.copy()
         env["BERZCOIN_V1_MINING_TARGET_SECS"] = "120"
         completed = subprocess.run(cmd, env=env, check=False)
