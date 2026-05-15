@@ -36,7 +36,7 @@ class TestActivateWalletRPC(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 node = _Node(Path(tmp))
-                manager = SimpleWalletManager(Path(tmp))
+                manager = SimpleWalletManager(Path(tmp), wallet_passphrase="unit-test-passphrase")
                 wallet = manager.create_wallet()
                 node.simple_wallet_manager = manager
 
@@ -70,8 +70,8 @@ class TestActivateWalletRPC(unittest.TestCase):
                 self.assertEqual(locked.get("status"), "locked")
                 self.assertFalse(manager.is_wallet_unlocked())
 
-                bad = await handlers.wallet_passphrase("wrong", 30)
-                self.assertIn("error", bad)
+                with self.assertRaises(Exception):
+                    await handlers.wallet_passphrase("wrong", 30)
                 self.assertFalse(manager.is_wallet_unlocked())
 
                 good = await handlers.wallet_passphrase("unit-test-passphrase", 30)

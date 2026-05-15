@@ -50,6 +50,12 @@ jobs:
         run: |
           pytest -q tests/chaos tests/integration/test_chaos_regression.py --junitxml artifacts/chaos-junit.xml
 
+      - name: Run crash-recovery storage suite
+        env:
+          BERZ_TEST_SEED: "20260514"
+        run: |
+          pytest -q tests/integration/test_process_crash_recovery_storage.py --junitxml artifacts/crash-junit.xml
+
       - name: Summarize artifact files
         run: |
           find artifacts -maxdepth 3 -type f | sort > artifacts/file-list.txt

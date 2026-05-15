@@ -14,6 +14,9 @@ class Schema:
             CREATE TABLE IF NOT EXISTS blocks (
                 hash TEXT PRIMARY KEY,
                 height INTEGER NOT NULL,
+                file_path TEXT,
+                file_number INTEGER DEFAULT -1,
+                file_offset INTEGER DEFAULT 0,
                 version INTEGER NOT NULL,
                 prev_block_hash TEXT NOT NULL,
                 merkle_root TEXT NOT NULL,
@@ -27,6 +30,21 @@ class Schema:
                 processed_at INTEGER NOT NULL
             )
         """,
+        "block_undo": """
+            CREATE TABLE IF NOT EXISTS block_undo (
+                block_hash TEXT NOT NULL,
+                txid TEXT NOT NULL,
+                input_index INTEGER NOT NULL,
+                prev_txid TEXT NOT NULL,
+                prev_index INTEGER NOT NULL,
+                value INTEGER NOT NULL,
+                script_pubkey BLOB NOT NULL,
+                address TEXT,
+                height INTEGER NOT NULL,
+                is_coinbase BOOLEAN NOT NULL,
+                PRIMARY KEY (block_hash, txid, input_index)
+            )
+        """,
         "block_headers": """
             CREATE TABLE IF NOT EXISTS block_headers (
                 hash TEXT PRIMARY KEY,
@@ -38,7 +56,8 @@ class Schema:
                 bits INTEGER NOT NULL,
                 nonce INTEGER NOT NULL,
                 chainwork TEXT NOT NULL,
-                is_valid BOOLEAN NOT NULL
+                is_valid BOOLEAN NOT NULL,
+                status_flags INTEGER NOT NULL DEFAULT 0
             )
         """,
         "transactions": """
@@ -145,8 +164,10 @@ class Schema:
         "idx_blocks_hash": "CREATE INDEX IF NOT EXISTS idx_blocks_hash ON blocks(hash)",
         "idx_blocks_prev_hash": "CREATE INDEX IF NOT EXISTS idx_blocks_prev_hash ON blocks(prev_block_hash)",
         "idx_blocks_timestamp": "CREATE INDEX IF NOT EXISTS idx_blocks_timestamp ON blocks(timestamp)",
+        "idx_blocks_file_number": "CREATE INDEX IF NOT EXISTS idx_blocks_file_number ON blocks(file_number)",
         "idx_block_headers_height": "CREATE INDEX IF NOT EXISTS idx_block_headers_height ON block_headers(height)",
         "idx_block_headers_prev_hash": "CREATE INDEX IF NOT EXISTS idx_block_headers_prev_hash ON block_headers(prev_block_hash)",
+        "idx_block_undo_block": "CREATE INDEX IF NOT EXISTS idx_block_undo_block ON block_undo(block_hash)",
         "idx_transactions_block": "CREATE INDEX IF NOT EXISTS idx_transactions_block ON transactions(block_hash)",
         "idx_transactions_height": "CREATE INDEX IF NOT EXISTS idx_transactions_height ON transactions(height)",
         "idx_transactions_txid": "CREATE INDEX IF NOT EXISTS idx_transactions_txid ON transactions(txid)",

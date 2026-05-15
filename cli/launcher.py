@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import time
+import ipaddress
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -79,19 +80,53 @@ def _registry_path(url_or_path: str) -> Path:
 
 
 def _load_registry_peers(url_or_path: str) -> List[str]:
+    def _normalize_peers(payload: object) -> List[str]:
+        # Supports:
+        # 1) {"peers": ["ip:port", ...]}
+        # 2) {"peers": [{"peer":"ip:port","status":"approved"}, ...]}
+        # 3) {"peers": {"ip:port": {"status":"approved", ...}, ...}}
+        # 4) legacy {"peers": ["ip:port", ...]} file-only mode
+        if not isinstance(payload, dict):
+            return []
+        peers = payload.get("peers", [])
+        out: List[str] = []
+        if isinstance(peers, list):
+            for item in peers:
+                if isinstance(item, str):
+                    val = item.strip()
+                    if val:
+                        out.append(val)
+                    continue
+                if isinstance(item, dict):
+                    peer = str(item.get("peer", "")).strip()
+                    status = str(item.get("status", "verified")).strip().lower()
+                    if peer and status in {"verified", "approved"}:
+                        out.append(peer)
+            return out
+        if isinstance(peers, dict):
+            for peer, meta in peers.items():
+                p = str(peer).strip()
+                if not p:
+                    continue
+                if isinstance(meta, dict):
+                    status = str(meta.get("status", "verified")).strip().lower()
+                    if status not in {"verified", "approved"}:
+                        continue
+                out.append(p)
+            return out
+        return []
+
     if _registry_is_http(url_or_path):
         req = urllib.request.Request(url_or_path.rstrip("/") + "/peers", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
-        peers = payload.get("peers", []) if isinstance(payload, dict) else []
-        return [str(p).strip() for p in peers if str(p).strip()]
+        return _normalize_peers(payload)
 
     path = _registry_path(url_or_path)
     if not path.exists():
         return []
     data = json.loads(path.read_text(encoding="utf-8"))
-    peers = data.get("peers", []) if isinstance(data, dict) else []
-    return [str(p).strip() for p in peers if str(p).strip()]
+    return _normalize_peers(data)
 
 
 def _register_registry_peer(url_or_path: str, peer: str) -> None:
@@ -118,11 +153,23 @@ def _register_registry_peer(url_or_path: str, peer: str) -> None:
     else:
         data = {}
 
-    peers = data.get("peers", [])
-    if not isinstance(peers, list):
-        peers = []
-    if peer not in peers:
-        peers.append(peer)
+    peers = data.get("peers", {})
+    if isinstance(peers, list):
+        # Legacy list format upgrade.
+        now = int(time.time())
+        peers = {str(p): {"status": "approved", "first_seen": now, "last_seen": now} for p in peers if str(p).strip()}
+    if not isinstance(peers, dict):
+        peers = {}
+    now = int(time.time())
+    prev = peers.get(peer, {})
+    if not isinstance(prev, dict):
+        prev = {}
+    peers[peer] = {
+        "status": str(prev.get("status", "verified")),
+        "first_seen": int(prev.get("first_seen", now)),
+        "last_seen": now,
+        "reason": str(prev.get("reason", "local_register")),
+    }
     data["peers"] = peers
     data["updated_at"] = int(time.time())
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -168,9 +215,15 @@ def _resolve_start_settings(args: argparse.Namespace) -> Dict[str, Any]:
         raise RuntimeError(f"Invalid network: {network}")
 
     port = int(args.port if args.port is not None else (file_port if file_port is not None else 8333))
+    if not 1 <= port <= 65535:
+        raise RuntimeError(f"Invalid port: {port}")
     data_dir_raw = args.data_dir if args.data_dir is not None else (file_datadir if file_datadir is not None else "~/.berzcoin")
     datadir = Path(os.path.expanduser(str(data_dir_raw)))
     rpcport = int(args.rpc_port) if args.rpc_port is not None else _default_rpc_port(port)
+    if not 1 <= rpcport <= 65535:
+        raise RuntimeError(f"Invalid rpc port: {rpcport}")
+    if port == rpcport:
+        raise RuntimeError("P2P port and RPC port must differ")
 
     connect_peers = list(args.connect or file_peers or [])
     use_seeds = bool(args.use_seeds)
@@ -179,6 +232,12 @@ def _resolve_start_settings(args: argparse.Namespace) -> Dict[str, Any]:
     if args.auto_discover:
         if not args.self_ip:
             raise RuntimeError("--auto-discover requires --self-ip (public/LAN reachable IP)")
+        try:
+            ipaddress.ip_address(str(args.self_ip).strip())
+        except ValueError as e:
+            raise RuntimeError(f"Invalid --self-ip value: {args.self_ip}") from e
+        if int(args.max_discovery_peers) <= 0:
+            raise RuntimeError("--max-discovery-peers must be > 0")
         self_peer = f"{args.self_ip}:{port}"
         try:
             _register_registry_peer(args.seed_registry, self_peer)
@@ -262,6 +321,17 @@ def _cmd_node_start(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_node_join(args: argparse.Namespace) -> int:
+    """One-command UX shortcut for joining a network via seed registry."""
+    if not hasattr(args, "config"):
+        args.config = None
+    args.auto_discover = True
+    args.use_seeds = True
+    args.connect = []
+    args.seed = []
+    return _cmd_node_start(args)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="BerzCoin easy launcher")
     subparsers = parser.add_subparsers(dest="group", required=True)
@@ -324,6 +394,38 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     start.set_defaults(use_seeds=True)
     start.set_defaults(func=_cmd_node_start)
+
+    join = node_subparsers.add_parser("join", help="Quick join via seed registry")
+    join.add_argument("--network", choices=["mainnet", "testnet", "regtest"], default="mainnet")
+    join.add_argument("--port", type=int, default=8333, help="P2P listening port")
+    join.add_argument("--rpc-port", type=int, dest="rpc_port", help="RPC port (default: p2p+1000)")
+    join.add_argument(
+        "--data-dir",
+        default="~/.berzcoin",
+        help="Node data directory",
+    )
+    join.add_argument(
+        "--seed-registry",
+        required=True,
+        help="Seed registry path/URL. Supports local path, file://, or http(s)://host:port",
+    )
+    join.add_argument(
+        "--self-ip",
+        required=True,
+        help="Reachable IP to register in seed registry",
+    )
+    join.add_argument(
+        "--max-discovery-peers",
+        type=int,
+        default=8,
+        help="Max peers imported from registry",
+    )
+    join.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print resolved startup config and exit",
+    )
+    join.set_defaults(func=_cmd_node_join)
 
     return parser
 

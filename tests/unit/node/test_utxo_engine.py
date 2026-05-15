@@ -166,6 +166,41 @@ class TestUTXOEngine(unittest.TestCase):
             db.disconnect()
             tmp.cleanup()
 
+    def test_get_utxos_for_spending_excludes_immature_coinbase(self) -> None:
+        tmp, db = self._setup_db()
+        try:
+            store = UTXOStore(db)
+            self._insert_block_row(db, "10" * 32, 50)
+
+            # best height = 50; maturity=100 => this coinbase is immature.
+            db.execute(
+                """
+                INSERT INTO utxo
+                (outpoint, txid, "index", value, script_pubkey, address, height, is_coinbase)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"{'aa'*32}:0", "aa" * 32, 0, 20, b"\x51", "bc1qtarget", 45, 1),
+            )
+            db.execute(
+                """
+                INSERT INTO utxo
+                (outpoint, txid, "index", value, script_pubkey, address, height, is_coinbase)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"{'bb'*32}:0", "bb" * 32, 0, 8, b"\x51", "bc1qtarget", 1, 0),
+            )
+
+            selected = store.get_utxos_for_spending(
+                "bc1qtarget",
+                target_value=8,
+                min_conf=1,
+                coinbase_maturity=100,
+            )
+            self.assertEqual([(u["txid"], u["value"]) for u in selected], [("bb" * 32, 8)])
+        finally:
+            db.disconnect()
+            tmp.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main()

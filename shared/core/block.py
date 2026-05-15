@@ -71,13 +71,14 @@ class BlockHeader:
         """
         return hash256(self.serialize())
     
-    def hash_hex(self) -> str:
+    def hash_hex(self, display_order: bool = True) -> str:
         """Get block hash as hex string.
-        
-        Returns:
-            Block hash in hex (little-endian display)
+
+        - Internal byte order: ``hash().hex()``.
+        - RPC/display order (Bitcoin-style): reversed bytes.
         """
-        return self.hash()[::-1].hex()
+        h = self.hash()
+        return h[::-1].hex() if display_order else h.hex()
     
     def is_valid_pow(self, target: int) -> bool:
         """Check if block hash meets difficulty target.
@@ -234,3 +235,23 @@ class Block:
     def __repr__(self) -> str:
         """String representation."""
         return f"Block(hash={self.header.hash_hex()[:16]}..., txs={len(self.transactions)})"
+
+
+def deserialize_header_strict(data: bytes) -> BlockHeader:
+    """Deserialize a block header and reject trailing garbage bytes."""
+    header, offset = BlockHeader.deserialize(data, 0)
+    if offset != len(data):
+        raise ValueError(
+            f"Extra bytes after block header: consumed={offset} total={len(data)}"
+        )
+    return header
+
+
+def deserialize_block_strict(data: bytes) -> Block:
+    """Deserialize a block and reject trailing garbage bytes."""
+    block, offset = Block.deserialize(data, 0)
+    if offset != len(data):
+        raise ValueError(
+            f"Extra bytes after block: consumed={offset} total={len(data)}"
+        )
+    return block

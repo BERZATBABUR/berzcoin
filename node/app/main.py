@@ -343,12 +343,14 @@ class BerzCoinNode:
             candidate_best,
             current_best,
             get_block_func=self.chainstate.get_block,
+            validate_connect_block=lambda blk, h: self.chainstate.validate_block_stateful(blk, h),
         ):
             return False, block_hash, "reorg_preflight_failed"
         ok, _disconnected, connected = reorg.reorganize(
             candidate_best,
             current_best,
             get_block_func=self.chainstate.get_block,
+            validate_connect_block=lambda blk, h: self.chainstate.validate_block_stateful(blk, h),
         )
         if not ok:
             return False, block_hash, "reorg_failed"
@@ -358,9 +360,7 @@ class BerzCoinNode:
             candidate_best.height,
             candidate_best.chainwork,
         )
-        if self.mempool:
-            for connected_block in connected:
-                await self.mempool.handle_connected_block(connected_block)
+        await self._reconcile_mempool_after_reorg(_disconnected, connected)
         if self.tx_indexer:
             self._reconcile_indexes_after_reorg(_disconnected, connected)
         if relay and self.connman:
@@ -385,6 +385,52 @@ class BerzCoinNode:
         if self.mempool:
             await self.mempool.handle_connected_block(block)
         return True
+
+    async def _reconcile_mempool_after_reorg(
+        self,
+        disconnected: List[Block],
+        connected: List[Block],
+    ) -> Dict[str, object]:
+        """Reconcile mempool across reorg:
+        1) Apply connected-block cleanup/revalidation.
+        2) Re-add non-coinbase txs from disconnected branch through normal admission.
+        """
+        if not self.mempool:
+            return {"readded": 0, "dropped": {}, "candidates": 0}
+
+        for connected_block in connected:
+            await self.mempool.handle_connected_block(connected_block)
+
+        # Re-add from oldest->newest disconnected blocks to improve parent-before-child odds.
+        candidates: List[Transaction] = []
+        for block in reversed(list(disconnected)):
+            for tx in getattr(block, "transactions", []) or []:
+                if tx.is_coinbase():
+                    continue
+                candidates.append(tx)
+
+        readded = 0
+        dropped: Dict[str, int] = {}
+        for tx in candidates:
+            txid = tx.txid().hex()
+            if self.chainstate and self.chainstate.transaction_exists(txid):
+                dropped["already_in_chain"] = dropped.get("already_in_chain", 0) + 1
+                continue
+            ok = await self.mempool.add_transaction(tx, source_peer="reorg_readd")
+            if ok:
+                readded += 1
+            else:
+                reason = self.mempool.last_reject_reason or "reorg_readd_rejected"
+                dropped[str(reason)] = dropped.get(str(reason), 0) + 1
+
+        if candidates:
+            logger.info(
+                "Reorg mempool reconciliation: candidates=%s readded=%s dropped=%s",
+                len(candidates),
+                readded,
+                dict(sorted(dropped.items())),
+            )
+        return {"readded": int(readded), "dropped": dropped, "candidates": len(candidates)}
 
     def _index_connected_block(self, block: Block, height: int) -> None:
         if not self.tx_indexer:
@@ -682,12 +728,41 @@ class BerzCoinNode:
             if self.connman:
                 self.connman.peer_scores.record_bad(peer.address, "msg_rate_limit")
             return
+        if (
+            self.connman
+            and getattr(self.connman, "authority_chain_enabled", False)
+            and hasattr(self.connman, "_is_verifier_ready")
+            and not self.connman._is_verifier_ready()
+            and command in {"inv", "tx", "cmpctblock"}
+        ):
+            # During catch-up, avoid full-relay processing; sync path still accepts headers/blocks/getdata.
+            return
 
         try:
             if command == "sendcmpct":
                 msg, _ = SendCmpctMessage.deserialize(payload)
                 peer.prefers_compact_blocks = bool(msg.announce)
                 peer.compact_block_version = int(msg.version)
+                return
+
+            if command == "join_request":
+                if self.connman:
+                    await self.connman.handle_join_request(peer, payload)
+                return
+
+            if command == "join_challenge":
+                if self.connman:
+                    await self.connman.handle_join_challenge(peer, payload)
+                return
+
+            if command == "join_attest":
+                if self.connman:
+                    await self.connman.handle_join_attest(peer, payload)
+                return
+
+            if command == "join_result":
+                if self.connman:
+                    await self.connman.handle_join_result(peer, payload)
                 return
 
             if command == "getaddr":
@@ -746,7 +821,7 @@ class BerzCoinNode:
 
             if command == "inv":
                 inv, _ = InvMessage.deserialize(payload)
-                max_inv = 2000
+                max_inv = int(self.config.get("p2p_inv_max_items", 2000))
                 inventory = inv.inventory
                 if len(inventory) > max_inv:
                     if self.connman:
@@ -922,7 +997,7 @@ class BerzCoinNode:
 
             if command == "getdata":
                 req, _ = GetDataMessage.deserialize(payload)
-                max_getdata = 1024
+                max_getdata = int(self.config.get("p2p_getdata_max_items", 1024))
                 inventory = req.inventory
                 if len(inventory) > max_getdata:
                     if self.connman:
@@ -1088,6 +1163,19 @@ class BerzCoinNode:
             setattr(self.chainstate, "network", self.config.get("network"))
         except Exception:
             pass
+        startup_mode = (
+            self.config.get_startup_consistency_mode()
+            if hasattr(self.config, "get_startup_consistency_mode")
+            else str(self.config.get("startup_consistency_mode", "fast")).strip().lower()
+        )
+        if bool(self.config.get("utxo_startup_verify", False)) and startup_mode == "fast":
+            startup_mode = "verify"
+        startup_report = self.chainstate.run_startup_consistency(startup_mode)
+        if startup_mode in {"verify", "recovery"} and not bool(startup_report.get("ok", False)):
+            logger.error("Startup consistency checks failed (%s): %s", startup_mode, startup_report)
+            return False
+        if startup_mode != "fast":
+            logger.info("Startup consistency report (%s): %s", startup_mode, startup_report)
         return True
 
     async def _init_indexers(self) -> bool:
@@ -1307,6 +1395,7 @@ class BerzCoinNode:
             node_config=self.config,
             connect_only=connect_only,
         )
+        self.connman.chainstate = self.chainstate
         self.connman.on_message = self._on_p2p_message
         self.connman.peer_scores.configure_persistence(self.config.get_datadir())
         if self.mempool is not None:
@@ -1349,6 +1438,9 @@ class BerzCoinNode:
         self.simple_wallet_manager = SimpleWalletManager(
             self.config.get_datadir(),
             network=self.config.get("network", "mainnet"),
+            wallet_passphrase=self.config.get("wallet_encryption_passphrase", ""),
+            allow_insecure_fallback=bool(self.config.get("wallet_allow_insecure_fallback", False)),
+            default_unlock_timeout_secs=int(self.config.get("wallet_default_unlock_timeout", 300)),
         )
         activate_key = str(self.config.get("wallet_private_key", "") or "").strip()
         if activate_key:
@@ -1445,21 +1537,36 @@ class BerzCoinNode:
             "get_health": control.get_health,
             "get_readiness": control.get_readiness,
             "get_metrics": control.get_metrics,
+            "verify_utxo_state": control.verify_utxo_state,
+            "verifyutxostate": control.verify_utxo_state,
+            "check_storage_consistency": control.check_storage_consistency,
+            "checkstorageconsistency": control.check_storage_consistency,
             "listbanned": self.list_banned,
             "setban": self.set_ban,
             "clearbanned": self.clear_banned,
 
             # Blockchain
             "get_blockchain_info": blockchain.get_blockchain_info,
+            "getblockchaininfo": blockchain.get_blockchain_info,
             "get_block": blockchain.get_block,
+            "getblock": blockchain.get_block,
+            "get_block_hash": blockchain.get_block_hash,
+            "getblockhash": blockchain.get_block_hash,
+            "get_block_header": blockchain.get_block_header,
+            "getblockheader": blockchain.get_block_header,
             "get_block_count": blockchain.get_block_count,
             "get_best_block_hash": blockchain.get_best_block_hash,
+            "getrawtransaction": blockchain.get_raw_transaction,
+            "get_raw_transaction": blockchain.get_raw_transaction,
 
             # Mempool
             "get_mempool_info": mempool.get_mempool_info,
+            "getmempoolinfo": mempool.get_mempool_info,
             "get_mempool_diagnostics": mempool.get_mempool_diagnostics,
             "get_raw_mempool": mempool.get_raw_mempool,
+            "getrawmempool": mempool.get_raw_mempool,
             "send_raw_transaction": mempool.send_raw_transaction,
+            "sendrawtransaction": mempool.send_raw_transaction,
             "submit_package": mempool.submit_package,
 
             # Wallet (private-key model)
@@ -1482,8 +1589,10 @@ class BerzCoinNode:
             # Mining
             "get_mining_info": mining.get_mining_info,
             "get_block_template": mining.get_block_template,
+            "getblocktemplate": mining.get_block_template,
             "submit_block": mining.submit_block,
             "generate": mining.generate,
+            "generatetoaddress": mining.generate_to_address,
             "setgenerate": mining_control.set_generate,
             "getminingstatus": mining_control.get_mining_status,
             "setminingaddress": mining_control.set_mining_address,

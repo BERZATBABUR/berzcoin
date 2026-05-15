@@ -18,7 +18,8 @@ class _Mempool:
     def __init__(self, txs):
         self._txs = txs
 
-    async def get_transactions(self):
+    async def get_transactions_for_block(self, max_weight):
+        _ = max_weight
         return self._txs
 
     async def remove_transaction(self, _txid):

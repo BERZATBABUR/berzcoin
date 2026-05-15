@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from shared.core.transaction import Transaction
 from shared.protocol.messages import InvMessage
 from shared.utils.logging import get_logger
+from node.rpc.errors import RPCError
 
 logger = get_logger()
 
@@ -173,18 +174,12 @@ class MempoolHandlers:
         tx_bytes = bytes.fromhex(hex_string.strip())
         tx, _ = Transaction.deserialize(tx_bytes)
 
-        if hasattr(self.node, "on_transaction"):
-            accepted, txid, reason = await self.node.on_transaction(tx, relay=True)
-            if accepted:
-                return txid
-            raise ValueError(f"Transaction rejected: {reason}")
-
-        if await self.node.mempool.add_transaction(tx):
-            if self.node.connman:
-                inv = InvMessage(inventory=[(InvMessage.InvType.MSG_TX, tx.txid())])
-                await self.node.connman.broadcast('inv', inv.serialize())
-            return tx.txid().hex()
-        raise ValueError('Transaction rejected by mempool')
+        if not hasattr(self.node, "on_transaction"):
+            raise RPCError(-32000, "Node transaction accept path unavailable")
+        accepted, txid, reason = await self.node.on_transaction(tx, relay=True)
+        if accepted:
+            return txid
+        raise RPCError(-32000, f"Transaction rejected: {reason}")
 
     async def test_mempool_accept(self, raw_txs: List[str], max_fee_rate: int = 0) -> List[Dict[str, Any]]:
         _ = max_fee_rate

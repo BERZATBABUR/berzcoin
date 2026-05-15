@@ -210,8 +210,14 @@ class BlockValidator:
             if txout.value < 0:
                 logger.error(f"Negative output value: {txout.value}")
                 return False
+            if txout.value == 0:
+                logger.error("Zero output value is not allowed")
+                return False
             if txout.value > max_money:
                 logger.error("Output value exceeds max money")
+                return False
+            if not txout.script_pubkey:
+                logger.error("Empty output script is not allowed")
                 return False
             total_out += txout.value
             if self.limits.is_dust_output(txout.value, txout.script_pubkey):

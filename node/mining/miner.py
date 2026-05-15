@@ -104,6 +104,10 @@ class MiningNode:
 
                 # Select transactions from mempool
                 transactions = await self._select_transactions()
+                if not self._validate_selected_transactions(transactions):
+                    logger.warning("Selected transaction set failed miner consistency checks; rebuilding candidate")
+                    await asyncio.sleep(0.1)
+                    continue
 
                 # Calculate block reward
                 subsidy = get_block_subsidy(next_height, self.chainstate.params)
@@ -206,57 +210,16 @@ class MiningNode:
         return None
 
     async def _submit_block(self, block: Block) -> bool:
-        """Submit mined block to chain."""
-        if self.block_acceptor is not None:
-            accepted, _block_hash, reason = await self.block_acceptor(
-                block, None, False
-            )
-            if not accepted and reason in {"stateful_validation_failed", "connect_failed"}:
-                await self._drop_candidate_transactions(block, reason)
-            return bool(accepted)
-
-        from node.validation.connect import ConnectBlock
-        from node.wallet.core.tx_builder import TransactionBuilder
-
-        height = self.chainstate.get_best_height() + 1
-
-        if not block.transactions:
+        """Submit mined block through the same acceptance path used by peer/RPC blocks."""
+        if self.block_acceptor is None:
+            logger.error("Miner block_acceptor not configured; refusing miner-only block connect path")
             return False
-        expected_script = TransactionBuilder(self.chainstate.network)._create_script_pubkey(self.mining_address)
-        if not block.transactions[0].vout or block.transactions[0].vout[0].script_pubkey != expected_script:
-            logger.error("Coinbase reward address mismatch; rejecting mined block")
-            return False
-
-        if not self.chainstate.validate_block_stateful(block, height):
-            logger.error(f"Invalid block at height {height}")
-            await self._drop_candidate_transactions(block, "stateful_validation_failed")
-            return False
-
-        block_hash = block.header.hash_hex()
-        if self.chainstate.block_index.get_block(block_hash):
-            return True
-
-        block_work = self.chainstate.chainwork.calculate_chain_work([block.header])
-        chainwork_total = self.chainstate.get_best_chainwork() + block_work
-        self.chainstate.blocks_store.write_block(block, height)
-        self.chainstate.block_index.add_block(block, height, chainwork_total)
-
-        connect = ConnectBlock(
-            self.chainstate.utxo_store,
-            self.chainstate.block_index,
-            network=self.chainstate.params.get_network_name(),
+        accepted, _block_hash, reason = await self.block_acceptor(
+            block, None, False
         )
-        if not connect.connect(block):
-            return False
-
-        self.chainstate.set_best_block(block_hash, height, chainwork_total)
-        self.chainstate.header_chain.add_header(block.header, height, chainwork_total)
-
-        # Remove confirmed transactions and revalidate remaining mempool entries.
-        await self.mempool.handle_connected_block(block)
-
-        logger.info(f"Block {height} added to chain")
-        return True
+        if not accepted and reason in {"stateful_validation_failed", "connect_failed"}:
+            await self._drop_candidate_transactions(block, reason)
+        return bool(accepted)
 
     async def _drop_candidate_transactions(self, block: Block, reason: str) -> None:
         """Avoid repeated mining failures by evicting invalid candidate txs from mempool."""
@@ -274,38 +237,17 @@ class MiningNode:
             )
 
     async def _select_transactions(self) -> List[Transaction]:
-        """Select transactions from mempool (highest fee first)."""
+        """Select transactions from mempool via canonical block-selection API only."""
         if not self.mempool:
             return []
         reserved_weight = 4000
         max_weight = int(getattr(self.chainstate.params, "max_block_weight", 4_000_000))
         available_weight = max(0, max_weight - reserved_weight)
         get_for_block = getattr(self.mempool, "get_transactions_for_block", None)
-        if callable(get_for_block):
-            return await get_for_block(max_weight=available_weight)
-
-        # Backward-compat fallback for test stubs and older mempool adapters.
-        get_all = getattr(self.mempool, "get_transactions", None)
-        if not callable(get_all):
+        if not callable(get_for_block):
+            logger.warning("Mempool selector missing get_transactions_for_block; selecting no txs")
             return []
-        all_txs = await get_all()
-
-        txs_with_fees = []
-        for tx in all_txs:
-            fee = await self._get_transaction_fee(tx)
-            size = len(tx.serialize())
-            if size > 0:
-                txs_with_fees.append((tx, fee / size))
-
-        txs_with_fees.sort(key=lambda x: x[1], reverse=True)
-        selected = []
-        current_weight = reserved_weight
-        for tx, _ in txs_with_fees:
-            tx_weight = tx.weight()
-            if current_weight + tx_weight <= max_weight:
-                selected.append(tx)
-                current_weight += tx_weight
-        return selected
+        return await get_for_block(max_weight=available_weight)
 
     async def _calculate_fees(self, transactions: List[Transaction]) -> int:
         """Calculate total fees."""
@@ -416,6 +358,9 @@ class MiningNode:
         next_height = best_height + 1
 
         transactions = await self._select_transactions()
+        if not self._validate_selected_transactions(transactions):
+            logger.warning("mine_single_block: selected transaction set failed consistency checks")
+            return None
 
         subsidy = get_block_subsidy(next_height, self.chainstate.params)
         total_fees = await self._calculate_fees(transactions)
@@ -492,3 +437,38 @@ class MiningNode:
         if callable(getter):
             return int(getter(0x20000000))
         return 0x20000000
+
+    def _validate_selected_transactions(self, transactions: List[Transaction]) -> bool:
+        """Final miner-level sanity checks before block assembly."""
+        selected_txids = [tx.txid().hex() for tx in transactions]
+        if len(selected_txids) != len(set(selected_txids)):
+            return False
+
+        # Outpoint conflict check across selected package.
+        spent_outpoints = set()
+        for tx in transactions:
+            for txin in tx.vin:
+                outpoint = (txin.prev_tx_hash.hex(), int(txin.prev_tx_index))
+                if outpoint in spent_outpoints:
+                    return False
+                spent_outpoints.add(outpoint)
+
+        selected_set = set(selected_txids)
+        seen = set()
+        for tx in transactions:
+            txid = tx.txid().hex()
+            # Topological check: if a tx spends another selected tx output, parent must be earlier.
+            for txin in tx.vin:
+                parent = txin.prev_tx_hash.hex()
+                if parent in selected_set and parent not in seen:
+                    return False
+
+            # Optional mempool ancestor-order check when metadata exists.
+            parents_map = getattr(self.mempool, "unconfirmed_parents", None)
+            if isinstance(parents_map, dict):
+                parents = parents_map.get(txid, set()) or set()
+                for parent in parents:
+                    if parent in selected_set and parent not in seen:
+                        return False
+            seen.add(txid)
+        return True

@@ -17,6 +17,14 @@ SIGHASH_ALL = 0x01
 SIGHASH_NONE = 0x02
 SIGHASH_SINGLE = 0x03
 SIGHASH_ANYONECANPAY = 0x80
+SUPPORTED_ECDSA_SIGHASH_TYPES = {
+    SIGHASH_ALL,
+    SIGHASH_NONE,
+    SIGHASH_SINGLE,
+    SIGHASH_ALL | SIGHASH_ANYONECANPAY,
+    SIGHASH_NONE | SIGHASH_ANYONECANPAY,
+    SIGHASH_SINGLE | SIGHASH_ANYONECANPAY,
+}
 
 
 def calculate_legacy_sighash(
@@ -308,6 +316,9 @@ class SignatureChecker:
         if len(signature) == 0 or len(pubkey) == 0:
             return False
         try:
+            sighash_type = int(signature[-1])
+            if sighash_type not in SUPPORTED_ECDSA_SIGHASH_TYPES:
+                return False
             sig_der = signature[:-1]
             if self.flags & ScriptFlags.VERIFY_DERSIG:
                 if _parse_der_signature(sig_der) is None:
@@ -315,8 +326,10 @@ class SignatureChecker:
             if self.flags & ScriptFlags.VERIFY_LOW_S:
                 if not _is_low_s(sig_der):
                     return False
-            if self.flags & ScriptFlags.VERIFY_STRICTENC and len(pubkey) not in (33, 65):
-                return False
+            if self.flags & ScriptFlags.VERIFY_STRICTENC:
+                # Enforce compressed pubkeys consistently for ECDSA paths.
+                if len(pubkey) != 33 or pubkey[0] not in (0x02, 0x03):
+                    return False
             if (
                 self.use_segwit_v0
                 and (self.flags & ScriptFlags.VERIFY_WITNESS_PUBKEYTYPE)

@@ -77,6 +77,25 @@ class HealthChecker:
             return {"status": "unhealthy", "message": "Chainstate not initialized"}
         try:
             best_height = self.node.chainstate.get_best_height()
+            best_hash = self.node.chainstate.get_best_block_hash()
+            if best_hash:
+                idx = getattr(self.node.chainstate, "block_index", None)
+                entry = idx.get_block(best_hash) if idx else None
+                if entry is None:
+                    return {
+                        "status": "unhealthy",
+                        "message": "Best tip missing from block index",
+                        "height": best_height,
+                        "best_hash": best_hash,
+                    }
+                store = getattr(self.node.chainstate, "blocks_store", None)
+                if store is not None and not store.read_block_by_hash(best_hash):
+                    return {
+                        "status": "unhealthy",
+                        "message": "Best tip block missing from block storage",
+                        "height": best_height,
+                        "best_hash": best_hash,
+                    }
             return {
                 "status": "healthy",
                 "message": f"Chain at height {best_height}",

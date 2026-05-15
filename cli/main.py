@@ -5,6 +5,7 @@ import json
 import argparse
 import asyncio
 import os
+import re
 from typing import Any, Optional
 
 import aiohttp
@@ -50,6 +51,9 @@ class BerzCoinCLI:
     async def run(self, args: Optional[list] = None) -> int:
         parsed_args = self.parser.parse_args(args)
 
+        if not self._validate_common_args(parsed_args):
+            return 2
+
         if parsed_args.rpcuser:
             self.rpc_user = parsed_args.rpcuser
         if parsed_args.rpcpassword:
@@ -84,6 +88,41 @@ class BerzCoinCLI:
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
+
+    def _validate_common_args(self, args: argparse.Namespace) -> bool:
+        rpcport = int(getattr(args, "rpcport", 0) or 0)
+        if not 1 <= rpcport <= 65535:
+            print(f"Error: invalid rpc port: {rpcport}", file=sys.stderr)
+            return False
+
+        command = str(getattr(args, "command", "") or "")
+        if command == "sendrawtransaction":
+            return self._validate_hex_arg(getattr(args, "hexstring", ""), "transaction hex")
+        if command == "submitblock":
+            return self._validate_hex_arg(getattr(args, "hexdata", ""), "block hex")
+        if command in {"testmempoolaccept", "submitpackage"}:
+            for item in list(getattr(args, "hexstrings", []) or []):
+                if not self._validate_hex_arg(item, "transaction hex"):
+                    return False
+            return True
+        if command == "generate":
+            count = int(getattr(args, "numblocks", 0) or 0)
+            if count <= 0:
+                print("Error: numblocks must be > 0", file=sys.stderr)
+                return False
+            return True
+        return True
+
+    @staticmethod
+    def _validate_hex_arg(value: str, label: str) -> bool:
+        text = str(value or "").strip().lower()
+        if not text:
+            print(f"Error: missing {label}", file=sys.stderr)
+            return False
+        if len(text) % 2 != 0 or not re.fullmatch(r"[0-9a-f]+", text):
+            print(f"Error: malformed {label}", file=sys.stderr)
+            return False
+        return True
 
     async def _execute_command(self, args: argparse.Namespace) -> Any:
         handler = CommandHandler(self.rpc_url, self.rpc_user, self.rpc_password)
@@ -192,6 +231,31 @@ class BerzCoinCLI:
             return await handler.control.uptime()
         if args.command == 'getnetworkinfo':
             return await handler.control.get_network_info()
+        if args.command == 'addpeer':
+            return await handler.control.add_peer(args.address, args.mode)
+        if args.command == 'addnode':
+            return await handler.control.add_peer(args.address, 'addnode')
+        if args.command == 'listpeers':
+            return await handler.control.list_peers(getattr(args, 'verbose', False))
+        if args.command == 'verifypeer':
+            return await handler.control.verify_peer(
+                args.target,
+                getattr(args, 'verifier_id', ''),
+                getattr(args, 'verifier_node', 'local'),
+            )
+        if args.command == 'verify-node':
+            return await handler.control.verify_peer(
+                args.target,
+                getattr(args, 'verifier_id', ''),
+                getattr(args, 'verifier_node', 'local'),
+            )
+        if args.command == 'joinnetwork':
+            return await handler.control.join_network(
+                args.seed_registry,
+                args.self_ip,
+                getattr(args, 'port', 8333),
+                getattr(args, 'max_peers', 8),
+            )
 
         return None
 

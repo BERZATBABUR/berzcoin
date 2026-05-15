@@ -1,6 +1,8 @@
 """Regression tests for security and wallet-path fixes."""
 
 import asyncio
+import io
+import logging
 import shutil
 import tempfile
 import unittest
@@ -154,7 +156,11 @@ class TestSecurityRegressions(unittest.TestCase):
 
     def test_send_flow_accepts_utxo_index_field(self) -> None:
         async def run_test() -> None:
-            manager = SimpleWalletManager(self.node.config.get_datadir(), network="regtest")
+            manager = SimpleWalletManager(
+                self.node.config.get_datadir(),
+                network="regtest",
+                wallet_passphrase="unit-test-passphrase",
+            )
             wallet = manager.create_wallet()
             manager.activate_wallet(wallet.private_key_hex)
 
@@ -231,5 +237,39 @@ class TestSecurityRegressions(unittest.TestCase):
             self.assertIsNotNone(node_stub.mempool.last_tx)
             self.assertEqual(len(node_stub.mempool.last_tx.vin), 1)
             self.assertEqual(node_stub.mempool.last_tx.vin[0].prev_tx_index, 7)
+
+        asyncio.run(run_test())
+
+    def test_logs_do_not_leak_wallet_or_auth_secrets(self) -> None:
+        async def run_test() -> None:
+            stream = io.StringIO()
+            handler = logging.StreamHandler(stream)
+            root = logging.getLogger()
+            old_level = root.level
+            root.setLevel(logging.DEBUG)
+            root.addHandler(handler)
+            try:
+                self.assertTrue(await self.node.initialize())
+                self.assertIsNotNone(self.node.simple_wallet_manager)
+                wallet = self.node.simple_wallet_manager.create_wallet()
+                self.node.simple_wallet_manager.activate_wallet(wallet.private_key_hex)
+                handlers = WalletHandlers(self.node)
+                await handlers.get_wallet_info()
+                if self.node.miner:
+                    await self.node.miner.mine_single_block(wallet.address)
+            finally:
+                root.removeHandler(handler)
+                root.setLevel(old_level)
+
+            logs = stream.getvalue()
+            forbidden = [
+                wallet.private_key_hex,
+                wallet.mnemonic,
+                "Authorization:",
+                ".cookie",
+                "walletpassphrase",
+            ]
+            for needle in forbidden:
+                self.assertNotIn(str(needle), logs)
 
         asyncio.run(run_test())

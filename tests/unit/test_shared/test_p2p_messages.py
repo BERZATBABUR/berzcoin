@@ -13,6 +13,10 @@ from shared.protocol.messages import (
     BlockTxnMessage,
     CmpctBlockMessage,
     GetBlockTxnMessage,
+    JoinAttestMessage,
+    JoinChallengeMessage,
+    JoinRequestMessage,
+    JoinResultMessage,
     SendCmpctMessage,
 )
 
@@ -92,6 +96,68 @@ class TestP2PMessages(unittest.TestCase):
         self.assertEqual(offset, len(raw))
         self.assertEqual(decoded.block_hash, b"\x22" * 32)
         self.assertEqual(decoded.transactions, [b"\x01\x02", b"\x03"])
+
+    def test_join_request_roundtrip(self) -> None:
+        msg = JoinRequestMessage(
+            node_id="node-a",
+            pubkey="02abcd",
+            listen_port=8333,
+            nonce=123,
+            timestamp=456,
+        )
+        raw = msg.serialize()
+        decoded, offset = JoinRequestMessage.deserialize(raw)
+        self.assertEqual(offset, len(raw))
+        self.assertEqual(decoded.node_id, "node-a")
+        self.assertEqual(decoded.pubkey, "02abcd")
+        self.assertEqual(decoded.listen_port, 8333)
+        self.assertEqual(decoded.nonce, 123)
+        self.assertEqual(decoded.timestamp, 456)
+
+    def test_join_challenge_roundtrip(self) -> None:
+        msg = JoinChallengeMessage(challenge_id=9, challenge=b"\x01\x02\x03", expires_at=999)
+        raw = msg.serialize()
+        decoded, offset = JoinChallengeMessage.deserialize(raw)
+        self.assertEqual(offset, len(raw))
+        self.assertEqual(decoded.challenge_id, 9)
+        self.assertEqual(decoded.challenge, b"\x01\x02\x03")
+        self.assertEqual(decoded.expires_at, 999)
+
+    def test_join_attest_roundtrip(self) -> None:
+        msg = JoinAttestMessage(
+            candidate_node_id="candidate-x",
+            verifier_node_id="verifier-y",
+            verifier_pubkey="03deadbeef",
+            challenge_id=11,
+            signature=b"sig",
+            timestamp=777,
+        )
+        raw = msg.serialize()
+        decoded, offset = JoinAttestMessage.deserialize(raw)
+        self.assertEqual(offset, len(raw))
+        self.assertEqual(decoded.candidate_node_id, "candidate-x")
+        self.assertEqual(decoded.verifier_node_id, "verifier-y")
+        self.assertEqual(decoded.verifier_pubkey, "03deadbeef")
+        self.assertEqual(decoded.challenge_id, 11)
+        self.assertEqual(decoded.signature, b"sig")
+        self.assertEqual(decoded.timestamp, 777)
+
+    def test_join_result_roundtrip(self) -> None:
+        msg = JoinResultMessage(
+            accepted=True,
+            code=0,
+            reason="accepted",
+            required_votes=2,
+            received_votes=2,
+        )
+        raw = msg.serialize()
+        decoded, offset = JoinResultMessage.deserialize(raw)
+        self.assertEqual(offset, len(raw))
+        self.assertTrue(decoded.accepted)
+        self.assertEqual(decoded.code, 0)
+        self.assertEqual(decoded.reason, "accepted")
+        self.assertEqual(decoded.required_votes, 2)
+        self.assertEqual(decoded.received_votes, 2)
 
 
 if __name__ == "__main__":

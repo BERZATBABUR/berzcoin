@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 from shared.core.block import Block
 from shared.core.transaction import Transaction
 from shared.utils.logging import get_logger
+from node.utils.crash_injection import maybe_crash
 from node.storage.utxo_store import UTXOStore
 from node.chain.block_index import BlockIndex, BlockIndexEntry
 from .disconnect import DisconnectBlock
@@ -25,25 +26,56 @@ class ConnectBlock:
         self.disconnect_block = DisconnectBlock(utxo_store, block_index)
     
     def connect(self, block: Block) -> bool:
-        height = self.block_index.get_height(block.header.hash_hex())
+        block_hash = block.header.hash_hex()
+        height = self.block_index.get_height(block_hash)
         if height is None:
             logger.error("Block not in index")
             return False
         logger.debug(f"Connecting block {height}")
         try:
             with self.utxo_store.db.transaction():
+                self.utxo_store.db.execute(
+                    "DELETE FROM block_undo WHERE block_hash = ?",
+                    (block_hash,),
+                )
                 for tx in block.transactions:
                     if not tx.is_coinbase():
+                        maybe_crash("during_block_connect")
                         for in_idx, txin in enumerate(tx.vin):
+                            prev_txid = txin.prev_tx_hash.hex()
+                            prev_index = int(txin.prev_tx_index)
+                            spent_utxo = self.utxo_store.get_utxo(prev_txid, prev_index)
+                            if not spent_utxo:
+                                raise RuntimeError(
+                                    f"Missing UTXO for undo capture {prev_txid}:{prev_index}"
+                                )
+                            self.utxo_store.db.execute("""
+                                INSERT OR REPLACE INTO block_undo
+                                (block_hash, txid, input_index, prev_txid, prev_index, value, script_pubkey, address, height, is_coinbase)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                block_hash,
+                                tx.txid().hex(),
+                                in_idx,
+                                prev_txid,
+                                prev_index,
+                                int(spent_utxo["value"]),
+                                spent_utxo["script_pubkey"],
+                                spent_utxo.get("address"),
+                                int(spent_utxo["height"]),
+                                int(1 if bool(spent_utxo["is_coinbase"]) else 0),
+                            ))
                             success = self.utxo_store.spend_utxo(
-                                txin.prev_tx_hash.hex(),
-                                txin.prev_tx_index,
+                                prev_txid,
+                                prev_index,
                                 spent_by_txid=tx.txid().hex(),
                                 spent_by_index=in_idx,
                             )
                             if not success:
-                                logger.error("Failed to spend UTXO")
-                                return False
+                                raise RuntimeError(
+                                    f"Failed to spend UTXO {txin.prev_tx_hash.hex()}:{txin.prev_tx_index}"
+                                )
+                            maybe_crash("during_utxo_update")
                     for i, txout in enumerate(tx.vout):
                         if txout.script_pubkey and txout.script_pubkey[0] == 0x6a:
                             continue
@@ -61,7 +93,7 @@ class ConnectBlock:
                                 UPDATE utxo SET address = ?
                                 WHERE txid = ? AND "index" = ?
                             """, (address, tx.txid().hex(), i))
-                self.block_index.mark_main_chain(block.header.hash_hex(), True)
+                self.block_index.mark_main_chain(block_hash, True)
                 self.utxo_store.db.execute("""
                     UPDATE outputs SET spent = 0, spent_by_txid = NULL
                     WHERE txid = ? AND "index" IN (

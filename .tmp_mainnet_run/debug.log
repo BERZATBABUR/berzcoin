@@ -1,0 +1,46 @@
+2026-05-15 12:02:34 - berzcoin - INFO - Connected to database: /home/berzat-babur/Desktop/berzcoin/.tmp_mainnet_run/mainnet.db
+2026-05-15 12:02:34 - berzcoin - INFO - Current version: 0, Target version: 9
+2026-05-15 12:02:34 - berzcoin - INFO - Applying migration 1: Initial schema
+2026-05-15 12:02:34 - berzcoin - INFO - Applying migration 2: Add address indexes
+2026-05-15 12:02:34 - berzcoin - INFO - Applying migration 3: Add chainwork to block_headers
+2026-05-15 12:02:34 - berzcoin - INFO - Applying migration 4: Add witness data to inputs
+2026-05-15 12:02:34 - berzcoin - INFO - Applying migration 5: Add transaction weight
+2026-05-15 12:02:34 - berzcoin - INFO - Applying migration 6: Transaction index tables (tx_index, tx_inputs, tx_outputs)
+2026-05-15 12:02:34 - berzcoin - INFO - Applying migration 7: Allow non-unique block heights for fork branch persistence
+2026-05-15 12:02:34 - berzcoin - INFO - Applying migration 8: Add explicit block file metadata and block undo table
+2026-05-15 12:02:34 - berzcoin - INFO - Applying migration 9: Add block header status flags for active/side/orphan/invalid tracking
+2026-05-15 12:02:34 - berzcoin - INFO - Migration complete. Now at version 9
+2026-05-15 12:02:34 - berzcoin - INFO - Loaded 0 blocks from index
+2026-05-15 12:02:34 - berzcoin - INFO - Empty mainnet datadir detected; importing canonical genesis header anchor
+2026-05-15 12:02:34 - berzcoin - INFO - Canonical mainnet genesis header anchor imported at height 0 (0000a2b00a878937)
+2026-05-15 12:02:34 - berzcoin - INFO - Loaded 1 blocks from index
+2026-05-15 12:02:34 - berzcoin - INFO - Chain state initialized: height=0, work=1
+2026-05-15 12:02:34 - berzcoin - INFO - No mempool snapshot found
+2026-05-15 12:02:34 - berzcoin - WARNING - dnsseed enabled but no seed hosts available for mainnet
+2026-05-15 12:02:34 - berzcoin - INFO - Peer discovery sources priority: connect=0 addnode=0 bootstrap=0 dns=0
+2026-05-15 12:02:34 - berzcoin - WARNING - Refusing insecure wallet fallback passphrase on mainnet; set wallet_encryption_passphrase or BERZCOIN_WALLET_PASSPHRASE (or enable BERZCOIN_ALLOW_INSECURE_WALLET_FALLBACK=1 on regtest/testnet)
+2026-05-15 12:02:46 - berzcoin - INFO - Connected to database: /home/berzat-babur/Desktop/berzcoin/.tmp_mainnet_run/mainnet.db
+2026-05-15 12:02:46 - berzcoin - INFO - Current version: 0, Target version: 9
+2026-05-15 12:02:46 - berzcoin - INFO - Applying migration 1: Initial schema
+2026-05-15 12:02:46 - berzcoin - INFO - Applying migration 2: Add address indexes
+2026-05-15 12:02:46 - berzcoin - INFO - Applying migration 3: Add chainwork to block_headers
+2026-05-15 12:02:46 - berzcoin - INFO - Applying migration 4: Add witness data to inputs
+2026-05-15 12:02:46 - berzcoin - INFO - Applying migration 5: Add transaction weight
+2026-05-15 12:02:46 - berzcoin - INFO - Applying migration 6: Transaction index tables (tx_index, tx_inputs, tx_outputs)
+2026-05-15 12:02:46 - berzcoin - INFO - Applying migration 7: Allow non-unique block heights for fork branch persistence
+2026-05-15 12:02:46 - berzcoin - INFO - Applying migration 8: Add explicit block file metadata and block undo table
+2026-05-15 12:02:46 - berzcoin - INFO - Applying migration 9: Add block header status flags for active/side/orphan/invalid tracking
+2026-05-15 12:02:46 - berzcoin - INFO - Migration complete. Now at version 9
+2026-05-15 12:02:46 - berzcoin - INFO - Loaded 0 blocks from index
+2026-05-15 12:02:46 - berzcoin - INFO - Empty mainnet datadir detected; importing canonical genesis header anchor
+2026-05-15 12:02:46 - berzcoin - INFO - Canonical mainnet genesis header anchor imported at height 0 (0000a2b00a878937)
+2026-05-15 12:02:46 - berzcoin - INFO - Loaded 1 blocks from index
+2026-05-15 12:02:46 - berzcoin - INFO - Chain state initialized: height=0, work=1
+2026-05-15 12:02:46 - berzcoin - INFO - No mempool snapshot found
+2026-05-15 12:02:46 - berzcoin - WARNING - dnsseed enabled but no seed hosts available for mainnet
+2026-05-15 12:02:46 - berzcoin - INFO - Peer discovery sources priority: connect=0 addnode=0 bootstrap=0 dns=0
+2026-05-15 12:02:46 - berzcoin - INFO - Secure RPC cookie created
+2026-05-15 12:02:46 - berzcoin - INFO - Node initialized successfully
+2026-05-15 12:02:46 - berzcoin - INFO - Starting BerzCoin node...
+2026-05-15 12:02:46 - berzcoin - ERROR - Failed to start P2P listener: could not bind on any address out of [('127.0.0.1', 29444)]
+2026-05-15 12:02:46 - berzcoin - INFO - Connection manager started

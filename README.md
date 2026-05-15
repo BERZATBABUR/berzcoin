@@ -24,6 +24,28 @@ Bootstrap dependencies + editable install in one command:
 scripts/setup.sh
 ```
 
+### Network start examples
+
+```bash
+# regtest
+python3 -m cli.launcher node start --network regtest --port 18444 --rpc-port 18443 --data-dir ~/.berzcoin/regtest
+
+# testnet
+python3 -m cli.launcher node start --network testnet --port 18333 --rpc-port 18332 --data-dir ~/.berzcoin/testnet
+
+# mainnet
+python3 -m cli.launcher node start --network mainnet --port 8333 --rpc-port 8332 --data-dir ~/.berzcoin/mainnet
+```
+
+### Safe regtest reset
+
+```bash
+scripts/reset_datadir_safe.sh \
+  --network regtest \
+  --datadir ~/.berzcoin/regtest \
+  --confirm-reset
+```
+
 Auto-growing peer discovery (register + auto-join):
 
 1. Start a lightweight seed registry service on a stable machine:
@@ -215,6 +237,7 @@ Release-readiness checklist + fresh-environment run guide:
   - `docs/RUNBOOK_DEPLOY.md`
   - `docs/RUNBOOK_UPGRADE.md`
   - `docs/RUNBOOK_INCIDENTS.md`
+  - `docs/RUNBOOK_ADMISSION.md`
 
 Useful tuning keys in `berzcoin.conf`:
 - `sync_getdata_batch_size`

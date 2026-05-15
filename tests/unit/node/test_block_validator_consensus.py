@@ -239,6 +239,28 @@ class TestBlockValidatorConsensus(unittest.TestCase):
         strict_cb = _coinbase(tag=b"\x02\x99\x14")
         self.assertFalse(strict_validator.validate_coinbase(strict_cb, height=20))
 
+    def test_rejects_zero_value_output(self):
+        params = ConsensusParams.regtest()
+        utxo_store = _UTXOStore({
+            ("aa" * 32, 0): {"value": 5_000, "script_pubkey": b"\x51", "height": 1, "is_coinbase": False}
+        })
+        validator = BlockValidator(params, utxo_store, _BlockIndex("11" * 32))
+        tx = _spend("aa" * 32, 0)
+        tx.vout = [TxOut(value=0, script_pubkey=b"\x51")]
+        with patch("node.chain.validation.verify_input_script", return_value=True):
+            self.assertFalse(validator.validate_transaction(tx, height=10, is_coinbase=False))
+
+    def test_rejects_empty_output_script(self):
+        params = ConsensusParams.regtest()
+        utxo_store = _UTXOStore({
+            ("aa" * 32, 0): {"value": 5_000, "script_pubkey": b"\x51", "height": 1, "is_coinbase": False}
+        })
+        validator = BlockValidator(params, utxo_store, _BlockIndex("11" * 32))
+        tx = _spend("aa" * 32, 0)
+        tx.vout = [TxOut(value=1_000, script_pubkey=b"")]
+        with patch("node.chain.validation.verify_input_script", return_value=True):
+            self.assertFalse(validator.validate_transaction(tx, height=10, is_coinbase=False))
+
 
 if __name__ == "__main__":
     unittest.main()

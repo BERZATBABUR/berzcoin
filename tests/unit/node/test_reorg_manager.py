@@ -242,3 +242,53 @@ class TestReorgManager(unittest.TestCase):
         self.assertTrue(entries[old1.block_hash].is_main_chain())
         self.assertTrue(entries[old2.block_hash].is_main_chain())
         self.assertEqual(idx.get_best_hash(), old2.block_hash)
+
+    def test_deep_reorg_within_limit_succeeds(self):
+        entries = {}
+        fork = "ab" * 32
+        entries[fork] = _Entry(100, fork, "00" * 32)
+        old_best = self._mk_chain("cd", 101, 120, fork, entries)  # depth 20
+        new_best = self._mk_chain("ef", 101, 121, fork, entries)  # heavier by 1 block
+
+        idx = _BlockIndexStub(entries)
+        utxo = _UTXOStoreStub()
+        mgr = ReorgManager(utxo, idx, max_reorg_depth=32)
+        mgr.connect_block = _ConnectStub()
+        mgr.disconnect_block = _DisconnectStub()
+        idx.set_best_chain_tip(old_best.block_hash)
+
+        ok, disconnected, connected = mgr.reorganize(
+            new_best,
+            old_best,
+            get_block_func=lambda h: _Block(h, entries[h].header.prev_block_hash.hex()),
+        )
+        self.assertTrue(ok)
+        self.assertEqual(len(disconnected), 20)
+        self.assertEqual(len(connected), 21)
+        self.assertEqual(idx.get_best_hash(), new_best.block_hash)
+
+    def test_preflight_reorg_rejects_invalid_connect_block_via_validation_callback(self):
+        entries = {}
+        fork = "13" * 32
+        entries[fork] = _Entry(10, fork, "00" * 32)
+        old1 = self._mk_chain("24", 11, 11, fork, entries)
+        old2 = self._mk_chain("25", 12, 12, old1.block_hash, entries)
+        new1 = self._mk_chain("35", 11, 11, fork, entries)
+        new2 = self._mk_chain("36", 12, 12, new1.block_hash, entries)
+
+        idx = _BlockIndexStub(entries)
+        utxo = _UTXOStoreStub()
+        mgr = ReorgManager(utxo, idx, max_reorg_depth=144)
+        mgr.connect_block = _ConnectStub()
+        mgr.disconnect_block = _DisconnectStub()
+        idx.set_best_chain_tip(old2.block_hash)
+
+        bad_hash = new2.block_hash
+        ok = mgr.can_reorganize(
+            new2,
+            old2,
+            get_block_func=lambda h: _Block(h, entries[h].header.prev_block_hash.hex()),
+            validate_connect_block=lambda block, _height: block.header.hash_hex() != bad_hash,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(idx.get_best_hash(), old2.block_hash)

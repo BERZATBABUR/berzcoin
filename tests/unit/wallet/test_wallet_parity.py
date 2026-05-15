@@ -8,6 +8,7 @@ import unittest
 
 from node.wallet.core.coin_selection import CoinSelector
 from node.wallet.core.keystore import KeyStore
+from node.wallet.core.tx_builder import TransactionBuilder
 from node.wallet.simple_wallet import SimpleWallet
 from node.wallet.storage.backup import WalletBackup
 
@@ -62,7 +63,16 @@ class TestWalletParity(unittest.TestCase):
         self.assertTrue(created)
         self.assertFalse(mgr.restore_backup("network_guard", expected_network="mainnet"))
 
+    def test_tx_builder_rejects_non_positive_output_amounts(self) -> None:
+        builder = TransactionBuilder(network="regtest")
+        with self.assertRaisesRegex(ValueError, "Output amount must be positive"):
+            builder.create_transaction(
+                inputs=[("aa" * 32, 0, 10_000)],
+                outputs=[("1BoatSLRHtKNngkdXEeobR76b53LETtpyT", 0)],
+                change_address="1BoatSLRHtKNngkdXEeobR76b53LETtpyT",
+                fee=100,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
-

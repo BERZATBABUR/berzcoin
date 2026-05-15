@@ -3,11 +3,8 @@
 import asyncio
 import os
 import shutil
-import sys
 import tempfile
 import unittest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from node.app.main import BerzCoinNode
 from node.app.modes import ModeManager

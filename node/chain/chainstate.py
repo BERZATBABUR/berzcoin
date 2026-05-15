@@ -317,6 +317,159 @@ class ChainState:
     
     def get_utxo(self, txid: str, index: int) -> Optional[Dict[str, Any]]:
         return self.utxo_store.get_utxo(txid, index)
+
+    def verify_active_chain_utxo_state(self, max_mismatches: int = 20) -> Dict[str, Any]:
+        """Replay active chain and compare recomputed UTXO set with persisted DB state."""
+        expected: Dict[str, Dict[str, Any]] = {}
+        best_height = int(self.get_best_height())
+        if best_height < 0:
+            return {"ok": True, "best_height": best_height, "mismatches": []}
+
+        mismatches: List[str] = []
+
+        def _outpoint(txid: str, index: int) -> str:
+            return f"{txid}:{int(index)}"
+
+        for height in range(0, best_height + 1):
+            block = self.get_block_by_height(height)
+            if not block:
+                return {
+                    "ok": False,
+                    "best_height": best_height,
+                    "mismatches": [f"missing_main_chain_block_at_height:{height}"],
+                }
+            for tx in block.transactions:
+                if not tx.is_coinbase():
+                    for txin in tx.vin:
+                        key = _outpoint(txin.prev_tx_hash.hex(), txin.prev_tx_index)
+                        if key not in expected:
+                            mismatches.append(f"missing_spent_outpoint:{key}:height:{height}")
+                            if len(mismatches) >= max_mismatches:
+                                return {"ok": False, "best_height": best_height, "mismatches": mismatches}
+                        else:
+                            expected.pop(key, None)
+                for i, txout in enumerate(tx.vout):
+                    if txout.script_pubkey and txout.script_pubkey[0] in (0x6A, 0x6a):
+                        continue
+                    key = _outpoint(tx.txid().hex(), i)
+                    expected[key] = {
+                        "value": int(txout.value),
+                        "script_pubkey": bytes(txout.script_pubkey),
+                        "height": int(height),
+                        "is_coinbase": bool(tx.is_coinbase()),
+                    }
+
+        actual_rows = self.db.fetch_all(
+            'SELECT outpoint, value, script_pubkey, height, is_coinbase FROM utxo'
+        )
+        actual: Dict[str, Dict[str, Any]] = {}
+        for row in actual_rows:
+            actual[str(row["outpoint"])] = {
+                "value": int(row["value"]),
+                "script_pubkey": bytes(row["script_pubkey"]),
+                "height": int(row["height"]),
+                "is_coinbase": bool(row["is_coinbase"]),
+            }
+
+        expected_keys = set(expected.keys())
+        actual_keys = set(actual.keys())
+
+        for key in sorted(expected_keys - actual_keys):
+            mismatches.append(f"missing_utxo_in_db:{key}")
+            if len(mismatches) >= max_mismatches:
+                break
+        if len(mismatches) < max_mismatches:
+            for key in sorted(actual_keys - expected_keys):
+                mismatches.append(f"unexpected_utxo_in_db:{key}")
+                if len(mismatches) >= max_mismatches:
+                    break
+        if len(mismatches) < max_mismatches:
+            for key in sorted(expected_keys & actual_keys):
+                e = expected[key]
+                a = actual[key]
+                if (
+                    e["value"] != a["value"]
+                    or e["script_pubkey"] != a["script_pubkey"]
+                    or e["height"] != a["height"]
+                    or bool(e["is_coinbase"]) != bool(a["is_coinbase"])
+                ):
+                    mismatches.append(f"utxo_field_mismatch:{key}")
+                    if len(mismatches) >= max_mismatches:
+                        break
+
+        return {"ok": len(mismatches) == 0, "best_height": best_height, "mismatches": mismatches}
+
+    def run_startup_consistency(self, mode: str = "fast") -> Dict[str, Any]:
+        """Run startup storage/index/utxo consistency checks and optional safe repairs."""
+        mode_norm = str(mode or "fast").strip().lower()
+        report: Dict[str, Any] = {"mode": mode_norm, "ok": True, "checks": {}, "repairs": []}
+
+        block_scan = self.blocks_store.scan_raw_block_files()
+        report["checks"]["raw_blocks"] = block_scan
+        if not bool(block_scan.get("ok", False)):
+            report["ok"] = False
+
+        idx_report = self.block_index.validate_consistency(blocks_store=self.blocks_store)
+        report["checks"]["block_index"] = idx_report
+        if not bool(idx_report.get("ok", False)):
+            report["ok"] = False
+
+        if mode_norm in {"verify", "recovery"}:
+            utxo_report = self.verify_active_chain_utxo_state()
+            report["checks"]["utxo_vs_chain"] = utxo_report
+            if not bool(utxo_report.get("ok", False)):
+                report["ok"] = False
+
+        if mode_norm == "recovery":
+            repairs = self._attempt_safe_storage_recovery(report)
+            report["repairs"] = repairs
+            # Re-run post-recovery quick checks.
+            idx2 = self.block_index.validate_consistency(blocks_store=self.blocks_store)
+            report["checks"]["block_index_post_recovery"] = idx2
+            if not bool(idx2.get("ok", False)):
+                report["ok"] = False
+            else:
+                # permit recovery to heal prior issues
+                report["ok"] = True
+                if "utxo_vs_chain" in report["checks"]:
+                    report["ok"] = bool(report["checks"]["utxo_vs_chain"].get("ok", False))
+
+        return report
+
+    def _attempt_safe_storage_recovery(self, current_report: Dict[str, Any]) -> List[str]:
+        repairs: List[str] = []
+        raw_scan = current_report.get("checks", {}).get("raw_blocks", {}) or {}
+        raw_only = list(raw_scan.get("raw_only", []) or [])
+        for item in raw_only:
+            h = str(item.get("hash", "")).strip().lower()
+            block = self.blocks_store.read_block_by_hash(h)
+            if block is None:
+                continue
+            prev = block.header.prev_block_hash.hex()
+            parent = self.block_index.get_block(prev)
+            if parent is None and prev != ("00" * 32):
+                repairs.append(f"left_raw_only_orphan:{h}")
+                continue
+            height = 0 if prev == ("00" * 32) else int(parent.height) + 1
+            parent_work = 0 if parent is None else int(parent.chainwork)
+            total_work = parent_work + int(self.chainwork.calculate_block_work_from_header(block.header))
+            self.blocks_store.write_block(block, height)
+            self.block_index.add_block(block, height, total_work, update_best=False)
+            self.header_chain.add_header(block.header, height, total_work)
+            repairs.append(f"reindexed_raw_block:{h}@{height}")
+
+        best_hash = self.block_index.get_best_hash()
+        if best_hash and self.block_index.get_block(best_hash) is None:
+            self._reload_best_from_index()
+            repairs.append("reloaded_best_tip_from_index")
+
+        # Ensure chainstate pointers align with repaired index.
+        self._best_hash = self.block_index.get_best_hash()
+        self._best_height = self.block_index.get_best_height()
+        if self._best_hash:
+            ent = self.block_index.get_block(self._best_hash)
+            self._best_chainwork = int(ent.chainwork) if ent else 0
+        return repairs
     
     def get_balance(self, address: str) -> int:
         return self.utxo_store.get_balance(address)

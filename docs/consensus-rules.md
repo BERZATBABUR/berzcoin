@@ -33,9 +33,14 @@ Source of truth:
 A transaction is rejected if any of the following fail:
 - Referenced inputs missing or already spent.
 - Signature/script verification fails for spend path.
-- Output values invalid (negative or overflow).
+- Output values invalid (negative, zero, or overflow).
+- Any output uses an empty `script_pubkey`.
 - Total output exceeds total input.
 - Duplicate input outpoints in the same transaction.
+
+Notes:
+- Zero-value outputs are consensus-invalid in the current BerzCoin implementation.
+- Script *template* standardness (for example relay policy restrictions) is a mempool/policy concern; however, empty output scripts are consensus-invalid.
 
 ## Block Validity (Summary)
 

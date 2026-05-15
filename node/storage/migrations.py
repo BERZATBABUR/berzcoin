@@ -282,3 +282,68 @@ def register_standard_migrations(migrations: Migrations) -> None:
         migration_7_up,
         migration_7_down,
     )
+
+    def migration_8_up(db: Database):
+        cols = [r["name"] for r in db.fetch_all("PRAGMA table_info(blocks)")]
+        if "file_path" not in cols:
+            db.execute("ALTER TABLE blocks ADD COLUMN file_path TEXT")
+        if "file_number" not in cols:
+            db.execute("ALTER TABLE blocks ADD COLUMN file_number INTEGER DEFAULT -1")
+        if "file_offset" not in cols:
+            db.execute("ALTER TABLE blocks ADD COLUMN file_offset INTEGER DEFAULT 0")
+
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS block_undo (
+                block_hash TEXT NOT NULL,
+                txid TEXT NOT NULL,
+                input_index INTEGER NOT NULL,
+                prev_txid TEXT NOT NULL,
+                prev_index INTEGER NOT NULL,
+                value INTEGER NOT NULL,
+                script_pubkey BLOB NOT NULL,
+                address TEXT,
+                height INTEGER NOT NULL,
+                is_coinbase BOOLEAN NOT NULL,
+                PRIMARY KEY (block_hash, txid, input_index)
+            )
+        """)
+        db.execute("CREATE INDEX IF NOT EXISTS idx_block_undo_block ON block_undo(block_hash)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_blocks_file_number ON blocks(file_number)")
+
+    def migration_8_down(db: Database):
+        # Non-destructive down migration intentionally omitted for safety.
+        pass
+
+    migrations.register(
+        8,
+        "Add explicit block file metadata and block undo table",
+        migration_8_up,
+        migration_8_down,
+    )
+
+    def migration_9_up(db: Database):
+        cols = [r["name"] for r in db.fetch_all("PRAGMA table_info(block_headers)")]
+        if "status_flags" not in cols:
+            db.execute("ALTER TABLE block_headers ADD COLUMN status_flags INTEGER NOT NULL DEFAULT 0")
+        db.execute(
+            """
+            UPDATE block_headers
+            SET status_flags = CASE
+                WHEN is_valid = 1 THEN ?
+                ELSE ?
+            END
+            WHERE COALESCE(status_flags, 0) = 0
+            """,
+            (int((1 << 0) | (1 << 2)), int((1 << 0) | (1 << 6) | (1 << 8))),
+        )
+
+    def migration_9_down(db: Database):
+        # Non-destructive down migration intentionally omitted for safety.
+        pass
+
+    migrations.register(
+        9,
+        "Add block header status flags for active/side/orphan/invalid tracking",
+        migration_9_up,
+        migration_9_down,
+    )

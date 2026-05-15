@@ -18,6 +18,9 @@ import unittest
 from pathlib import Path
 
 from shared.consensus.buried_deployments import HARDFORK_TX_V2
+import pytest
+
+pytestmark = [pytest.mark.allow_sleep, pytest.mark.slow]
 
 
 def _run_enabled() -> bool:

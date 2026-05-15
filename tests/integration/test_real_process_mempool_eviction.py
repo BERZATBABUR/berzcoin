@@ -16,6 +16,10 @@ import time
 import unittest
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.allow_sleep, pytest.mark.slow]
+
 
 def _run_enabled() -> bool:
     return os.environ.get("BERZCOIN_RUN_REAL_NET_TESTS", "0") == "1"

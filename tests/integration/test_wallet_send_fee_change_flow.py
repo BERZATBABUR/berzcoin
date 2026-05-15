@@ -82,7 +82,7 @@ class TestWalletSendFlow(unittest.TestCase):
     def test_send_adds_change_and_signatures(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
-                manager = SimpleWalletManager(Path(tmp))
+                manager = SimpleWalletManager(Path(tmp), wallet_passphrase="unit-test-passphrase")
                 wallet = manager.create_wallet()
                 manager.activate_wallet(wallet.private_key_hex)
 
@@ -114,7 +114,7 @@ class TestWalletSendFlow(unittest.TestCase):
     def test_send_rejects_address_network_mismatch(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
-                manager = SimpleWalletManager(Path(tmp))
+                manager = SimpleWalletManager(Path(tmp), wallet_passphrase="unit-test-passphrase")
                 wallet = manager.create_wallet()
                 manager.activate_wallet(wallet.private_key_hex)
 
@@ -132,7 +132,7 @@ class TestWalletSendFlow(unittest.TestCase):
     def test_send_absorbs_dust_change_into_fee(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
-                manager = SimpleWalletManager(Path(tmp))
+                manager = SimpleWalletManager(Path(tmp), wallet_passphrase="unit-test-passphrase")
                 wallet = manager.create_wallet()
                 manager.activate_wallet(wallet.private_key_hex)
 

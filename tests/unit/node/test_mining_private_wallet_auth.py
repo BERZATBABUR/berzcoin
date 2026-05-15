@@ -84,7 +84,7 @@ class TestMiningPrivateWalletAuth(unittest.TestCase):
     def test_allows_mining_address_independent_from_active_wallet(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
-                manager = SimpleWalletManager(Path(tmp))
+                manager = SimpleWalletManager(Path(tmp), wallet_passphrase="unit-test-passphrase")
                 node = _Node(manager)
                 handlers = MiningControlHandlers(node)
 

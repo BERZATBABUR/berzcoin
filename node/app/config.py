@@ -24,8 +24,10 @@ class Config:
         "network": "mainnet",
         "bind": "0.0.0.0",
         "port": 8333,
+        "p2p_port": 8333,
         "rpcbind": "127.0.0.1",
         "rpcport": 8332,
+        "rpc_port": 8332,
         "rpcuser": "",
         "rpcpassword": "",
         "rpcallowip": ["127.0.0.1"],
@@ -62,6 +64,9 @@ class Config:
         # Passphrase used for encrypted wallet-at-rest storage (scrypt + AES-GCM).
         # Prefer setting via config/env in production deployments.
         "wallet_encryption_passphrase": "",
+        # Development-only override for insecure fallback passphrase when an
+        # explicit passphrase is not configured.
+        "wallet_allow_insecure_fallback": False,
         # Default unlock duration after create/activate (seconds).
         "wallet_default_unlock_timeout": 300,
         "mining": False,
@@ -91,6 +96,13 @@ class Config:
         "health_sync_lag_critical_blocks": 144,
         "health_min_peers_warn": 1,
         "health_max_mempool_txs_warn": 200000,
+        # Replay active chain and compare computed UTXO set with DB at startup.
+        "utxo_startup_verify": False,
+        # Startup consistency behavior:
+        # - fast: minimal checks
+        # - verify: run consistency checks and fail on mismatch
+        # - recovery: run checks and attempt safe repairs/reindexing
+        "startup_consistency_mode": "fast",
         "blocksonly": False,
         "lightwallet": False,
         "filterport": 8334,
@@ -99,6 +111,15 @@ class Config:
         "dnsseeds": [],
         "addnode": [],
         "connect": [],
+        # Node admission policy:
+        # - open: current permissive behavior
+        # - assisted: requires registry-approved peer path
+        # - strict: requires verifier attestation threshold
+        "admission_mode": "strict",
+        # Minimum distinct verifier attestations required in strict mode.
+        "min_verifier_votes": 2,
+        # Reserved for future join-token gating flows.
+        "admission_token_required": False,
         "authority_chain_enabled": False,
         "authority_trusted_nodes": [],
         "bootstrap_file": "bootstrap_nodes.json",
@@ -108,6 +129,9 @@ class Config:
         "webport": 8080,
         "web_require_auth": False,
         "rpc_require_auth": True,
+        "require_config_file_for_mainnet": False,
+        "warn_unknown_config_keys": True,
+        "fail_unknown_config_keys": False,
         "disable_ip_discovery": False,
         # Staged rollout switch for deeper network hardening.
         # Phase 0 default stays False to preserve current behavior.
@@ -123,13 +147,39 @@ class Config:
         # Project-specific consensus activation heights.
         # Example: {"berz_softfork_bip34_strict": 150, "berz_hardfork_tx_v2": 300}
         "custom_activation_heights": {},
+        # P2P hardening knobs (operator-configurable).
+        "p2p_max_message_size": 2_000_000,
+        "p2p_handshake_timeout_secs": 30,
+        "p2p_connect_timeout_secs": 10,
+        "p2p_read_timeout_secs": 30,
+        "p2p_write_timeout_secs": 15,
+        "p2p_idle_timeout_secs": 180,
+        "p2p_partial_message_timeout_secs": 10,
+        "p2p_min_read_progress_bytes": 1,
+        "p2p_ban_score_threshold": 100,
+        "p2p_violation_disconnect_threshold": 3,
+        "p2p_peer_discover_interval_secs": 300,
+        "p2p_reconnect_backoff_secs": 30,
+        "p2p_maintain_loop_interval_secs": 5,
+        "p2p_getaddr_interval_secs": 180,
+        "p2p_join_req_window_secs": 60,
+        "p2p_join_req_max_per_host": 20,
+        "p2p_attestation_max_skew_secs": 300,
+        "p2p_inv_max_items": 50000,
+        "p2p_getdata_max_items": 50000,
+        # Mainnet safety escape hatch: public P2P bind requires explicit override.
+        "mainnet_allow_unsafe_bind": False,
     }
 
     def __init__(self, config_path: Optional[str] = None):
         self.config = dict(self.DEFAULT_CONFIG)
         self.config_path = config_path
+        self._explicit_keys: set[str] = set()
+        self._unknown_keys: List[str] = []
         if config_path:
             self.load(config_path)
+        self.apply_env_overrides()
+        self.apply_network_defaults()
 
     def load(self, config_path: str) -> bool:
         try:
@@ -143,6 +193,10 @@ class Config:
                 parser.read_string("[main]\n" + raw)
             for section in parser.sections():
                 for key, value in parser.items(section):
+                    if key == "p2p_port":
+                        key = "port"
+                    elif key == "rpc_port":
+                        key = "rpcport"
                     if key == "listen":
                         self.config["bind"] = self._parse_value(value, self.config["bind"])
                         continue
@@ -160,9 +214,14 @@ class Config:
                         continue
                     if key in self.config:
                         self.config[key] = self._parse_value(value, self.config[key])
+                        self._explicit_keys.add(key)
+                    else:
+                        self._unknown_keys.append(key)
+                        if bool(self.config.get("warn_unknown_config_keys", True)):
+                            logger.warning("Unknown config key ignored: %s", key)
             logger.info("Loaded configuration from %s", config_path)
             return True
-        except (OSError, configparser.Error) as e:
+        except (OSError, configparser.Error, ValueError) as e:
             logger.error("Failed to load config: %s", e)
             return False
 
@@ -233,7 +292,46 @@ class Config:
         return self.config.get(key, default)
 
     def set(self, key: str, value: Any) -> None:
+        if key == "p2p_port":
+            key = "port"
+        elif key == "rpc_port":
+            key = "rpcport"
         self.config[key] = value
+        self._explicit_keys.add(key)
+
+    def apply_env_overrides(self) -> None:
+        """Load BERZCOIN_<KEY> overrides with predictable precedence."""
+        for key, default in self.DEFAULT_CONFIG.items():
+            env_key = f"BERZCOIN_{key.upper()}"
+            if env_key not in os.environ:
+                continue
+            raw = os.environ.get(env_key, "")
+            self.config[key] = self._parse_value(str(raw), default)
+            self._explicit_keys.add(key)
+
+    def apply_network_defaults(self) -> None:
+        network = str(self.config.get("network", "mainnet") or "mainnet").strip().lower()
+        if network not in {"mainnet", "testnet", "regtest"}:
+            return
+        per_network_ports = {
+            "mainnet": (8333, 8332),
+            "testnet": (18333, 18332),
+            "regtest": (18444, 18443),
+        }
+        p2p_port, rpc_port = per_network_ports[network]
+        if "port" not in self._explicit_keys:
+            self.config["port"] = int(p2p_port)
+        self.config["p2p_port"] = int(self.config["port"])
+        if "rpcport" not in self._explicit_keys:
+            self.config["rpcport"] = int(rpc_port)
+        self.config["rpc_port"] = int(self.config["rpcport"])
+        if "datadir" not in self._explicit_keys:
+            self.config["datadir"] = f"~/.berzcoin/{network}"
+        if "coinbase_maturity" not in self._explicit_keys:
+            # Keep fast developer loops on regtest while preserving stricter defaults elsewhere.
+            self.config["coinbase_maturity"] = 20 if network == "regtest" else 100
+        if "wallet_allow_insecure_fallback" not in self._explicit_keys:
+            self.config["wallet_allow_insecure_fallback"] = bool(network in {"regtest", "testnet"})
 
     def get_rpc_bind(self) -> str:
         """Address for the RPC listener; ties rpcbind to rpcallowip for safe defaults."""
@@ -293,6 +391,33 @@ class Config:
     def get_connect_peers(self) -> List[str]:
         """If non-empty, only these peers are used (no DNS discovery)."""
         return self._peer_list("connect")
+
+    def get_admission_mode(self) -> str:
+        """Return normalized admission mode: open|assisted|strict."""
+        raw = str(self.config.get("admission_mode", "open")).strip().lower()
+        if raw in {"open", "assisted", "strict"}:
+            return raw
+        logger.warning("Unknown admission_mode=%r; falling back to 'open'", raw)
+        return "open"
+
+    def get_min_verifier_votes(self) -> int:
+        """Return minimum verifier votes required for strict admission mode."""
+        try:
+            value = int(self.config.get("min_verifier_votes", 1))
+        except (TypeError, ValueError):
+            value = 1
+        return max(1, value)
+
+    def is_admission_token_required(self) -> bool:
+        """Whether join admission currently requires an out-of-band token."""
+        return bool(self.config.get("admission_token_required", False))
+
+    def get_startup_consistency_mode(self) -> str:
+        raw = str(self.config.get("startup_consistency_mode", "fast")).strip().lower()
+        if raw in {"fast", "verify", "recovery"}:
+            return raw
+        logger.warning("Unknown startup_consistency_mode=%r; falling back to 'fast'", raw)
+        return "fast"
 
     def is_connect_only(self) -> bool:
         return bool(self.get_connect_peers())
@@ -389,7 +514,11 @@ class Config:
         return params
 
     def validate(self) -> bool:
+        self.apply_network_defaults()
         datadir = self.get_datadir()
+        if datadir.exists() and not datadir.is_dir():
+            logger.error("datadir is not a directory: %s", datadir)
+            return False
         if not datadir.exists():
             try:
                 datadir.mkdir(parents=True, exist_ok=True)
@@ -400,6 +529,14 @@ class Config:
         if self.config["network"] not in ("mainnet", "testnet", "regtest"):
             logger.error("Invalid network: %s", self.config["network"])
             return False
+        network = str(self.config.get("network", "mainnet") or "mainnet").lower()
+        if bool(self.config.get("fail_unknown_config_keys", False)) and self._unknown_keys:
+            logger.error("Unknown config keys are not allowed: %s", sorted(set(self._unknown_keys)))
+            return False
+        if network == "mainnet" and bool(self.config.get("require_config_file_for_mainnet", False)):
+            if not self.config_path:
+                logger.error("mainnet requires explicit config file")
+                return False
 
         port = int(self.config["port"])
         if not 1024 <= port <= 65535:
@@ -410,8 +547,9 @@ class Config:
         if not 1024 <= rpcport <= 65535:
             logger.error("Invalid rpcport: %s", rpcport)
             return False
-
-        network = str(self.config.get("network", "mainnet") or "mainnet").lower()
+        if port == rpcport:
+            logger.error("port and rpcport must differ")
+            return False
         allow_missing = bool(self.config.get("allow_missing_bootstrap", False))
         if network != "regtest" and not allow_missing:
             if not self.has_viable_peer_discovery_source():
@@ -422,10 +560,74 @@ class Config:
                 )
                 return False
 
+        params = self.get_network_params()
+        if params.get_network_name() != network:
+            logger.error("Network magic mismatch for %s", network)
+            return False
+
+        marker = datadir / ".network"
+        if marker.exists():
+            try:
+                existing = marker.read_text(encoding="utf-8").strip().lower()
+            except OSError as e:
+                logger.error("Cannot read datadir network marker: %s", e)
+                return False
+            if existing and existing != network:
+                logger.error(
+                    "Datadir %s already belongs to network %s (requested %s)",
+                    datadir, existing, network
+                )
+                return False
+        else:
+            try:
+                marker.write_text(network + "\n", encoding="utf-8")
+            except OSError as e:
+                logger.error("Cannot write datadir network marker: %s", e)
+                return False
+
+        if network == "mainnet":
+            configured_target = int(self.config.get("mining_target_time_secs", 0) or 0)
+            if configured_target > 0 and configured_target != int(params.pow_target_spacing):
+                logger.error(
+                    "mining_target_time_secs override is not allowed on mainnet (got=%s expected=%s)",
+                    configured_target,
+                    int(params.pow_target_spacing),
+                )
+                return False
+            if bool(self.config.get("wallet_debug_secrets", False)):
+                logger.error("wallet_debug_secrets must be disabled on mainnet")
+                return False
+            if bool(self.config.get("wallet_allow_insecure_fallback", False)):
+                logger.error("wallet_allow_insecure_fallback must be disabled on mainnet")
+                return False
+            rpcbind = str(self.config.get("rpcbind", "127.0.0.1")).strip()
+            rpc_public = rpcbind not in {"127.0.0.1", "::1", "localhost"}
+            allowips = self._normalize_rpcallowip(self.config.get("rpcallowip", ["127.0.0.1"]))
+            if rpc_public and not bool(self.config.get("rpc_require_auth", True)):
+                logger.error("Public RPC requires authentication on mainnet")
+                return False
+            if "*" in allowips and not bool(self.config.get("rpc_require_auth", True)):
+                logger.error("Wildcard rpcallowip requires authentication on mainnet")
+                return False
+            bind = str(self.config.get("bind", "0.0.0.0")).strip()
+            is_public_bind = bind not in {"127.0.0.1", "::1", "localhost"}
+            if is_public_bind and not bool(self.config.get("mainnet_allow_unsafe_bind", False)):
+                logger.error(
+                    "Refusing public P2P bind on mainnet without mainnet_allow_unsafe_bind=true"
+                )
+                return False
+
         return True
 
     def to_dict(self) -> Dict[str, Any]:
-        return dict(self.config)
+        out = dict(self.config)
+        out["p2p_port"] = int(out.get("port", out.get("p2p_port", 8333)))
+        out["rpc_port"] = int(out.get("rpcport", out.get("rpc_port", 8332)))
+        return out
+
+    @staticmethod
+    def config_priority_order() -> List[str]:
+        return ["defaults", "config_file", "environment", "cli_arguments"]
 
     def save(self, config_path: str) -> bool:
         try:

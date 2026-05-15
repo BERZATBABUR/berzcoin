@@ -3,13 +3,15 @@
 import asyncio
 import json
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from aiohttp import web
 from aiohttp.web import json_response
 from shared.utils.logging import get_logger
 from shared.crypto.keys import PrivateKey
 from shared.crypto.signatures import sign_message_hash
 from shared.script.sigchecks import SIGHASH_ALL, calculate_legacy_sighash
-from node.app.interface_verifier import TwoNodeFlowVerifier
 from node.wallet.simple_wallet import SimpleWalletManager
 from node.wallet.core.tx_builder import TransactionBuilder
 
@@ -25,11 +27,6 @@ class MiningWalletDashboard:
         self.port = port
         self.app = None
         self.runner = None
-        self._flow_running = False
-        self._flow_task = None
-        self._flow_started_at = 0
-        self._flow_last_result = None
-        self._flow_last_error = None
 
     def _wallet_manager(self) -> SimpleWalletManager:
         manager = getattr(self.node, "simple_wallet_manager", None)
@@ -37,6 +34,9 @@ class MiningWalletDashboard:
             manager = SimpleWalletManager(
                 self.node.config.get_datadir(),
                 network=self.node.config.get("network", "mainnet"),
+                wallet_passphrase=self.node.config.get("wallet_encryption_passphrase", ""),
+                allow_insecure_fallback=bool(self.node.config.get("wallet_allow_insecure_fallback", False)),
+                default_unlock_timeout_secs=int(self.node.config.get("wallet_default_unlock_timeout", 300)),
             )
             setattr(self.node, "simple_wallet_manager", manager)
         return manager
@@ -83,8 +83,6 @@ class MiningWalletDashboard:
         self.app.router.add_post('/api/wallet/activate', self.activate_wallet)
         self.app.router.add_get('/api/wallet/info', self.wallet_info)
         self.app.router.add_post('/api/wallet/create', self.create_wallet)
-        self.app.router.add_post('/api/wallet/unlock', self.wallet_unlock)
-        self.app.router.add_post('/api/wallet/lock', self.wallet_lock)
         self.app.router.add_post('/api/wallet/send', self.send_transaction)
         self.app.router.add_get('/api/wallet/balance', self.get_balance)
         
@@ -98,9 +96,10 @@ class MiningWalletDashboard:
         self.app.router.add_get('/api/blocks/recent', self.recent_blocks)
         self.app.router.add_get('/api/mempool/entries', self.mempool_entries)
         self.app.router.add_get('/api/network/peers', self.network_peers)
+        self.app.router.add_get('/api/network/registry', self.network_registry)
+        self.app.router.add_post('/api/network/registry/approve', self.network_registry_approve)
+        self.app.router.add_post('/api/network/registry/reject', self.network_registry_reject)
         self.app.router.add_get('/api/authority/chain', self.authority_chain_info)
-        self.app.router.add_post('/api/interface/verify-two-node-flow', self.verify_two_node_flow)
-        self.app.router.add_get('/api/interface/verify-two-node-flow', self.verify_two_node_flow_status)
         
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
@@ -179,30 +178,6 @@ class MiningWalletDashboard:
         payload["active"] = True
         return json_response(payload)
 
-    async def wallet_unlock(self, request):
-        """Unlock active wallet for signing for timeout seconds."""
-        data = await request.json()
-        passphrase = str(data.get("passphrase", "") or "")
-        timeout = int(data.get("timeout", 300) or 300)
-        manager = self._wallet_manager()
-        if manager.get_active_wallet() is None:
-            return json_response({"error": "No active wallet"}, status=400)
-        if not manager.wallet_passphrase(passphrase, timeout):
-            return json_response({"error": "Invalid passphrase or timeout"}, status=400)
-        return json_response(
-            {
-                "status": "unlocked",
-                "timeout": int(timeout),
-                "unlocked_until": int(getattr(manager, "_unlocked_until", 0)),
-            }
-        )
-
-    async def wallet_lock(self, request):
-        """Lock active wallet immediately."""
-        manager = self._wallet_manager()
-        manager.lock_wallet()
-        return json_response({"status": "locked"})
-    
     async def get_balance(self, request):
         """Get wallet balance."""
         wallet = self._wallet_manager().get_active_wallet()
@@ -524,6 +499,128 @@ class MiningWalletDashboard:
             })
         return json_response({'connected': connman.get_connected_count(), 'peers': peers})
 
+    def _default_registry_url(self) -> str:
+        cfg = getattr(self.node, "config", None)
+        if cfg is None:
+            return ""
+        for key in ("seed_registry", "seedregistry", "seed_registry_url"):
+            value = cfg.get(key, "")
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    def _fetch_registry_payload(self, registry_url: str) -> dict:
+        req = urllib.request.Request(registry_url.rstrip("/") + "/peers?all=1", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _post_registry_action(self, registry_url: str, endpoint: str, payload: dict) -> dict:
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            registry_url.rstrip("/") + endpoint,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    async def network_registry(self, request):
+        """Get seed registry peer state (approved/pending/rejected)."""
+        registry_url = str(request.query.get("url", "") or "").strip()
+        if not registry_url:
+            registry_url = self._default_registry_url()
+        if not registry_url:
+            return json_response(
+                {
+                    "registry_url": "",
+                    "connected": False,
+                    "error": "registry url not configured",
+                    "approved": [],
+                    "pending": [],
+                    "rejected": [],
+                }
+            )
+        try:
+            payload = await asyncio.to_thread(self._fetch_registry_payload, registry_url)
+        except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as e:
+            return json_response(
+                {
+                    "registry_url": registry_url,
+                    "connected": False,
+                    "error": str(e),
+                    "approved": [],
+                    "pending": [],
+                    "rejected": [],
+                },
+                status=502,
+            )
+        peers = payload.get("peers", []) if isinstance(payload, dict) else []
+        approved = []
+        pending = []
+        rejected = []
+        for item in peers:
+            if not isinstance(item, dict):
+                continue
+            row = {
+                "peer": str(item.get("peer", "")).strip(),
+                "status": str(item.get("status", "")).strip(),
+                "reason": str(item.get("reason", "")).strip(),
+                "last_seen": int(item.get("last_seen", 0) or 0),
+                "reachable": bool(item.get("reachable", False)),
+            }
+            if not row["peer"]:
+                continue
+            status = row["status"].lower()
+            if status == "approved":
+                approved.append(row)
+            elif status == "pending":
+                pending.append(row)
+            else:
+                rejected.append(row)
+        return json_response(
+            {
+                "registry_url": registry_url,
+                "connected": True,
+                "approved": approved,
+                "pending": pending,
+                "rejected": rejected,
+            }
+        )
+
+    async def network_registry_approve(self, request):
+        data = await request.json()
+        registry_url = str(data.get("url", "") or "").strip() or self._default_registry_url()
+        peer = str(data.get("peer", "") or "").strip()
+        if not registry_url or not peer:
+            return json_response({"ok": False, "error": "url and peer are required"}, status=400)
+        try:
+            payload = await asyncio.to_thread(
+                self._post_registry_action, registry_url, "/approve", {"peer": peer}
+            )
+            return json_response(payload)
+        except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as e:
+            return json_response({"ok": False, "error": str(e)}, status=502)
+
+    async def network_registry_reject(self, request):
+        data = await request.json()
+        registry_url = str(data.get("url", "") or "").strip() or self._default_registry_url()
+        peer = str(data.get("peer", "") or "").strip()
+        reason = str(data.get("reason", "manual_reject") or "manual_reject").strip()
+        if not registry_url or not peer:
+            return json_response({"ok": False, "error": "url and peer are required"}, status=400)
+        try:
+            payload = await asyncio.to_thread(
+                self._post_registry_action,
+                registry_url,
+                "/reject",
+                {"peer": peer, "reason": reason},
+            )
+            return json_response(payload)
+        except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as e:
+            return json_response({"ok": False, "error": str(e)}, status=502)
+
     async def authority_chain_info(self, request):
         """Get authority-chain admission state."""
         connman = getattr(self.node, "connman", None)
@@ -531,49 +628,26 @@ class MiningWalletDashboard:
             return json_response({'enabled': False, 'error': 'P2P not initialized'}, status=503)
         enabled = bool(getattr(connman, "authority_chain_enabled", False))
         if not enabled:
-            return json_response({'enabled': False, 'verified_nodes': [], 'verifiers': [], 'verified_by': {}})
+            return json_response(
+                {
+                    'enabled': False,
+                    'verified_nodes': [],
+                    'verifiers': [],
+                    'verified_by': {},
+                    'admission_metrics': {
+                        'pending_join_count': 0,
+                        'verify_latency_ms_avg': 0.0,
+                        'verify_latency_samples': 0,
+                        'rejection_reasons': {},
+                        'verifier_activity': {},
+                    },
+                }
+            )
         status = connman.authority_chain.get_status()
+        status["admission_metrics"] = connman.get_admission_metrics()
         status["enabled"] = True
         return json_response(status)
 
-    async def verify_two_node_flow(self, request):
-        """Run two-node end-to-end verification flow for interface users."""
-        if self._flow_running:
-            return json_response(await self._build_flow_status())
-        self._flow_running = True
-        self._flow_started_at = int(time.time())
-        self._flow_last_result = None
-        self._flow_last_error = None
-        self._flow_task = asyncio.create_task(self._run_two_node_flow())
-        return json_response(await self._build_flow_status())
-
-    async def _run_two_node_flow(self) -> None:
-        try:
-            verifier = TwoNodeFlowVerifier()
-            result = await asyncio.to_thread(verifier.run, 180)
-            self._flow_last_result = result
-        except Exception as e:
-            self._flow_last_error = str(e)
-            self._flow_last_result = {'ok': False, 'error': self._flow_last_error}
-            logger.exception("Two-node verification flow crashed")
-        finally:
-            self._flow_running = False
-            self._flow_task = None
-
-    async def _build_flow_status(self):
-        now = int(time.time())
-        return {
-            'running': bool(self._flow_running),
-            'started_at': int(self._flow_started_at or 0),
-            'elapsed_secs': max(0, now - int(self._flow_started_at or now)),
-            'result': self._flow_last_result,
-            'error': self._flow_last_error,
-        }
-
-    async def verify_two_node_flow_status(self, request):
-        """Get latest two-node verification flow status/result."""
-        return json_response(await self._build_flow_status())
-    
     def _get_difficulty(self) -> float:
         """Get current difficulty."""
         if not self.node.chainstate:
@@ -602,21 +676,101 @@ class MiningWalletDashboard:
         <head>
             <title>BerzCoin Mining & Wallet</title>
             <style>
+                :root {
+                    --bg0: #0b1020;
+                    --bg1: #121a33;
+                    --card: rgba(15, 24, 48, 0.78);
+                    --line: rgba(135, 193, 255, 0.28);
+                    --text: #d9eeff;
+                    --muted: #98b4d3;
+                    --accent: #2de1c2;
+                    --accent2: #4aa8ff;
+                    --danger: #ff6b7a;
+                    --warn: #ffd166;
+                }
                 * { margin: 0; padding: 0; box-sizing: border-box; }
-                body { font-family: monospace; background: #0a0a0a; color: #00ff00; padding: 20px; }
-                .container { max-width: 1200px; margin: 0 auto; }
-                h1 { color: #00ff00; border-bottom: 2px solid #00ff00; margin-bottom: 20px; }
-                .nav { background: #1a1a1a; padding: 10px; margin-bottom: 20px; border: 1px solid #00ff00; }
-                .nav a { color: #00ff00; text-decoration: none; margin: 0 15px; }
-                .nav a:hover { background: #00ff00; color: #0a0a0a; padding: 5px; }
-                .card { background: #1a1a1a; border: 1px solid #00ff00; padding: 20px; margin: 10px 0; border-radius: 5px; }
-                button { background: #00ff00; color: #0a0a0a; padding: 10px 20px; margin: 5px; border: none; cursor: pointer; font-family: monospace; font-weight: bold; }
-                button:hover { background: #00cc00; }
-                input, textarea { background: #2a2a2a; border: 1px solid #00ff00; color: #00ff00; padding: 8px; margin: 5px; font-family: monospace; width: 100%; }
-                .warning { color: #ffaa00; }
-                .error { color: #ff0000; }
-                .success { color: #00ff00; }
-                pre { background: #0a0a0a; padding: 10px; overflow-x: auto; }
+                body {
+                    font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                    color: var(--text);
+                    padding: 24px;
+                    min-height: 100vh;
+                    background:
+                        radial-gradient(900px 500px at -10% -20%, rgba(74, 168, 255, 0.28), transparent 60%),
+                        radial-gradient(1000px 600px at 110% -10%, rgba(45, 225, 194, 0.18), transparent 55%),
+                        linear-gradient(160deg, var(--bg0), var(--bg1));
+                }
+                .container { max-width: 1240px; margin: 0 auto; display: grid; gap: 14px; }
+                h1 {
+                    color: var(--text);
+                    letter-spacing: 0.3px;
+                    margin-bottom: 8px;
+                    text-shadow: 0 0 18px rgba(74, 168, 255, 0.35);
+                }
+                .nav {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    background: var(--card);
+                    backdrop-filter: blur(6px);
+                    border: 1px solid var(--line);
+                    border-radius: 12px;
+                    padding: 12px;
+                    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+                }
+                .nav a {
+                    color: var(--text);
+                    text-decoration: none;
+                    padding: 8px 12px;
+                    border: 1px solid transparent;
+                    border-radius: 9px;
+                    transition: all .16s ease;
+                }
+                .nav a:hover {
+                    background: rgba(74, 168, 255, 0.17);
+                    border-color: rgba(74, 168, 255, 0.35);
+                    transform: translateY(-1px);
+                }
+                .card {
+                    background: var(--card);
+                    backdrop-filter: blur(5px);
+                    border: 1px solid var(--line);
+                    border-radius: 14px;
+                    padding: 18px;
+                    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.25);
+                    transition: transform .16s ease, box-shadow .16s ease;
+                }
+                .card:hover {
+                    transform: translateY(-2px);
+                    box-shadow: 0 16px 32px rgba(0, 0, 0, 0.32);
+                }
+                .card h3 { margin-bottom: 8px; color: #dff7ff; }
+                button {
+                    background: linear-gradient(135deg, var(--accent), var(--accent2));
+                    color: #08212c;
+                    padding: 10px 15px;
+                    margin: 5px;
+                    border: none;
+                    border-radius: 10px;
+                    cursor: pointer;
+                    font-family: inherit;
+                    font-weight: 700;
+                    transition: transform .14s ease, filter .14s ease;
+                }
+                button:hover { transform: translateY(-1px); filter: brightness(1.05); }
+                input, textarea {
+                    background: rgba(7, 16, 33, 0.75);
+                    border: 1px solid var(--line);
+                    border-radius: 10px;
+                    color: var(--text);
+                    padding: 9px;
+                    margin: 6px 0;
+                    font-family: inherit;
+                    width: 100%;
+                }
+                .warning { color: var(--warn); }
+                .error { color: var(--danger); }
+                .success { color: var(--accent); }
+                pre { background: rgba(7, 16, 33, 0.85); padding: 10px; overflow-x: auto; border-radius: 10px; }
             </style>
         </head>
         <body>
@@ -659,12 +813,6 @@ class MiningWalletDashboard:
                     <div id="authorityStatus">Loading...</div>
                 </div>
 
-                <div class="card">
-                    <h3>🧪 2-Node End-to-End Verification</h3>
-                    <div>Runs full flow: start 2 nodes, activate wallets, mine/fund, send, mempool check, confirm block, eviction check.</div>
-                    <button onclick="runTwoNodeFlow()">Run Verification</button>
-                    <pre id="flowResult">Not started.</pre>
-                </div>
             </div>
             
             <script>
@@ -719,16 +867,31 @@ class MiningWalletDashboard:
                             document.getElementById('authorityStatus').innerHTML = `
                                 Enabled: ❌<br>
                                 Verified Nodes: 0<br>
-                                Verifiers: 0
+                                Verifiers: 0<br>
+                                Pending Joins: 0<br>
+                                Verify Latency Avg: 0 ms
                             `;
                         } else {
                             const verified = auth.verified_nodes || [];
                             const verifiers = auth.verifiers || [];
                             const verifiedBy = auth.verified_by || {};
+                            const metrics = auth.admission_metrics || {};
+                            const pendingJoinCount = metrics.pending_join_count || 0;
+                            const avgLatency = Math.round(metrics.verify_latency_ms_avg || 0);
+                            const rejectionReasons = metrics.rejection_reasons || {};
+                            const topReason = Object.keys(rejectionReasons).length
+                                ? Object.entries(rejectionReasons).sort((a, b) => b[1] - a[1])[0]
+                                : null;
+                            const verifierActivity = metrics.verifier_activity || {};
+                            const activeVerifiers = Object.keys(verifierActivity).length;
                             document.getElementById('authorityStatus').innerHTML = `
                                 Enabled: ✅<br>
                                 Verified Nodes: ${verified.length}<br>
                                 Verifiers: ${verifiers.length}<br>
+                                Pending Joins: ${pendingJoinCount}<br>
+                                Verify Latency Avg: ${avgLatency} ms (${metrics.verify_latency_samples || 0} samples)<br>
+                                Top Rejection: ${topReason ? (topReason[0] + ' (' + topReason[1] + ')') : 'none'}<br>
+                                Active Verifiers: ${activeVerifiers}<br>
                                 Last Mapping: ${Object.keys(verifiedBy).length ? JSON.stringify(verifiedBy).substring(0, 120) + '...' : '{}'}
                             `;
                         }
@@ -747,44 +910,8 @@ class MiningWalletDashboard:
                     } catch(e) {}
                 }
 
-                async function runTwoNodeFlow() {
-                    const out = document.getElementById('flowResult');
-                    out.textContent = 'Running verification flow...';
-                    try {
-                        await fetch('/api/interface/verify-two-node-flow', {method: 'POST'});
-                        await updateFlowStatus();
-                    } catch (e) {
-                        out.textContent = 'Verification failed: ' + e;
-                    }
-                }
-
-                async function updateFlowStatus() {
-                    const out = document.getElementById('flowResult');
-                    try {
-                        const resp = await fetch('/api/interface/verify-two-node-flow');
-                        const data = await resp.json();
-                        if (data.running) {
-                            out.textContent = `Running verification flow... (${data.elapsed_secs}s)`;
-                            return;
-                        }
-                        if (data.result) {
-                            out.textContent = JSON.stringify(data.result, null, 2);
-                            return;
-                        }
-                        if (data.error) {
-                            out.textContent = 'Verification failed: ' + data.error;
-                            return;
-                        }
-                        out.textContent = 'Not started.';
-                    } catch (e) {
-                        out.textContent = 'Verification status error: ' + e;
-                    }
-                }
-                
                 updateStatus();
-                updateFlowStatus();
                 setInterval(updateStatus, 3000);
-                setInterval(updateFlowStatus, 1500);
             </script>
         </body>
         </html>
@@ -798,13 +925,28 @@ class MiningWalletDashboard:
         <head>
             <title>Wallet - BerzCoin</title>
             <style>
-                body { background: #0a0a0a; color: #00ff00; font-family: monospace; padding: 20px; }
-                .container { max-width: 800px; margin: 0 auto; }
-                .card { background: #1a1a1a; border: 1px solid #00ff00; padding: 20px; margin: 10px 0; border-radius: 5px; }
-                button { background: #00ff00; color: #0a0a0a; padding: 10px; margin: 5px; border: none; cursor: pointer; }
-                input, textarea { width: 100%; background: #2a2a2a; border: 1px solid #00ff00; color: #00ff00; padding: 8px; margin: 5px 0; }
-                .warning { color: #ffaa00; }
-                .nav a { color: #00ff00; text-decoration: none; margin: 0 10px; }
+                :root {
+                    --bg0: #0b1020; --bg1: #121a33; --card: rgba(15, 24, 48, 0.78);
+                    --line: rgba(135, 193, 255, 0.28); --text: #d9eeff;
+                    --accent: #2de1c2; --accent2: #4aa8ff; --warn: #ffd166; --danger: #ff6b7a;
+                }
+                body {
+                    background:
+                        radial-gradient(900px 500px at -10% -20%, rgba(74, 168, 255, 0.28), transparent 60%),
+                        radial-gradient(1000px 600px at 110% -10%, rgba(45, 225, 194, 0.18), transparent 55%),
+                        linear-gradient(160deg, var(--bg0), var(--bg1));
+                    color: var(--text);
+                    font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                    padding: 24px;
+                }
+                .container { max-width: 920px; margin: 0 auto; }
+                .card { background: var(--card); border: 1px solid var(--line); padding: 18px; margin: 10px 0; border-radius: 12px; backdrop-filter: blur(5px); }
+                button { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #08212c; padding: 10px 14px; margin: 5px; border: none; border-radius: 10px; cursor: pointer; font-weight: 700; }
+                input, textarea { width: 100%; background: rgba(7, 16, 33, 0.75); border: 1px solid var(--line); color: var(--text); padding: 9px; margin: 5px 0; border-radius: 10px; }
+                .warning { color: var(--warn); }
+                .error { color: var(--danger); }
+                .success { color: var(--accent); }
+                .nav a { color: var(--text); text-decoration: none; margin: 0 10px; }
             </style>
         </head>
         <body>
@@ -833,15 +975,6 @@ class MiningWalletDashboard:
                     <div id="newWalletResult"></div>
                 </div>
 
-                <div class="card">
-                    <h3>🔒 Wallet Lock/Unlock</h3>
-                    <input type="password" id="walletPassphrase" placeholder="Wallet passphrase">
-                    <input type="number" id="walletUnlockTimeout" placeholder="Unlock timeout seconds" value="300">
-                    <button onclick="unlockWallet()">Unlock</button>
-                    <button onclick="lockWallet()">Lock</button>
-                    <div id="lockResult"></div>
-                </div>
-                
                 <div class="card">
                     <h3>📋 Current Wallet</h3>
                     <div id="walletInfo">No wallet active</div>
@@ -917,38 +1050,6 @@ class MiningWalletDashboard:
                     }
                 }
 
-                async function unlockWallet() {
-                    const passphrase = document.getElementById('walletPassphrase').value;
-                    const timeout = parseInt(document.getElementById('walletUnlockTimeout').value || '300', 10);
-                    const response = await fetch('/api/wallet/unlock', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({passphrase, timeout})
-                    });
-                    const data = await response.json();
-                    if (data.status === 'unlocked') {
-                        document.getElementById('lockResult').innerHTML = `<span class="success">✅ Unlocked for ${data.timeout}s</span>`;
-                        loadWalletInfo();
-                    } else {
-                        document.getElementById('lockResult').innerHTML = `<span class="error">❌ ${data.error || 'Unlock failed'}</span>`;
-                    }
-                }
-
-                async function lockWallet() {
-                    const response = await fetch('/api/wallet/lock', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({})
-                    });
-                    const data = await response.json();
-                    if (data.status === 'locked') {
-                        document.getElementById('lockResult').innerHTML = `<span class="success">✅ Wallet locked</span>`;
-                        loadWalletInfo();
-                    } else {
-                        document.getElementById('lockResult').innerHTML = `<span class="error">❌ ${data.error || 'Lock failed'}</span>`;
-                    }
-                }
-                
                 async function sendTransaction() {
                     const to = document.getElementById('sendTo').value;
                     const amount = parseFloat(document.getElementById('sendAmount').value);
@@ -992,17 +1093,29 @@ class MiningWalletDashboard:
         <head>
             <title>Mining - BerzCoin</title>
             <style>
-                body { background: #0a0a0a; color: #00ff00; font-family: monospace; padding: 20px; }
-                .container { max-width: 800px; margin: 0 auto; }
-                .card { background: #1a1a1a; border: 1px solid #00ff00; padding: 20px; margin: 10px 0; border-radius: 5px; }
-                button { background: #00ff00; color: #0a0a0a; padding: 10px 20px; margin: 5px; border: none; cursor: pointer; font-size: 16px; }
-                button:hover { background: #00cc00; }
-                input { width: 100%; background: #2a2a2a; border: 1px solid #00ff00; color: #00ff00; padding: 8px; margin: 5px 0; }
-                .mining-active { color: #00ff00; font-size: 24px; text-align: center; padding: 20px; animation: pulse 1s infinite; }
-                .error { color: #ff0000; }
-                .success { color: #00ff00; }
-                @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-                .nav a { color: #00ff00; text-decoration: none; margin: 0 10px; }
+                :root {
+                    --bg0: #0b1020; --bg1: #121a33; --card: rgba(15, 24, 48, 0.78);
+                    --line: rgba(135, 193, 255, 0.28); --text: #d9eeff;
+                    --accent: #2de1c2; --accent2: #4aa8ff; --danger: #ff6b7a;
+                }
+                body {
+                    background:
+                        radial-gradient(900px 500px at -10% -20%, rgba(74, 168, 255, 0.28), transparent 60%),
+                        radial-gradient(1000px 600px at 110% -10%, rgba(45, 225, 194, 0.18), transparent 55%),
+                        linear-gradient(160deg, var(--bg0), var(--bg1));
+                    color: var(--text);
+                    font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                    padding: 24px;
+                }
+                .container { max-width: 920px; margin: 0 auto; }
+                .card { background: var(--card); border: 1px solid var(--line); padding: 18px; margin: 10px 0; border-radius: 12px; backdrop-filter: blur(5px); }
+                button { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #08212c; padding: 10px 16px; margin: 5px; border: none; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 700; }
+                input { width: 100%; background: rgba(7, 16, 33, 0.75); border: 1px solid var(--line); color: var(--text); padding: 9px; margin: 5px 0; border-radius: 10px; }
+                .mining-active { color: var(--accent); font-size: 24px; text-align: center; padding: 20px; animation: pulse 1.2s infinite; text-shadow: 0 0 14px rgba(45, 225, 194, 0.55); }
+                .error { color: var(--danger); }
+                .success { color: var(--accent); }
+                @keyframes pulse { 0% { opacity: 1; transform: scale(1);} 50% { opacity: 0.72; transform: scale(1.01);} 100% { opacity: 1; transform: scale(1);} }
+                .nav a { color: var(--text); text-decoration: none; margin: 0 10px; }
             </style>
         </head>
         <body>
@@ -1160,14 +1273,60 @@ class MiningWalletDashboard:
         <head>
             <title>Blocks - BerzCoin</title>
             <style>
-                body { background: #0a0a0a; color: #00ff00; font-family: monospace; padding: 20px; }
-                .container { max-width: 1200px; margin: 0 auto; }
-                .nav a { color: #00ff00; text-decoration: none; margin: 0 10px; }
-                .card { background: #1a1a1a; border: 1px solid #00ff00; padding: 16px; margin: 10px 0; border-radius: 5px; }
+                :root {
+                    --bg: #020617;
+                    --bg-2: #0b1233;
+                    --card: rgba(11, 18, 51, 0.78);
+                    --text: #dbeafe;
+                    --muted: #93c5fd;
+                    --accent: #22d3ee;
+                    --accent-2: #10b981;
+                    --border: rgba(34, 211, 238, 0.35);
+                }
+                * { box-sizing: border-box; }
+                body {
+                    margin: 0;
+                    min-height: 100vh;
+                    color: var(--text);
+                    font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, monospace;
+                    background:
+                        radial-gradient(900px 500px at 10% -10%, rgba(34, 211, 238, 0.16), transparent 60%),
+                        radial-gradient(900px 500px at 100% 0%, rgba(16, 185, 129, 0.14), transparent 60%),
+                        linear-gradient(180deg, var(--bg-2), var(--bg));
+                    padding: 26px;
+                }
+                .container { max-width: 1280px; margin: 0 auto; }
+                .nav {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    margin-bottom: 20px;
+                }
+                .nav a {
+                    color: var(--muted);
+                    text-decoration: none;
+                    padding: 8px 12px;
+                    border-radius: 10px;
+                    border: 1px solid transparent;
+                }
+                .nav a:hover { color: var(--text); border-color: var(--border); background: rgba(34, 211, 238, 0.08); }
+                h1 { font-size: 44px; margin: 10px 0 18px 0; letter-spacing: 0.4px; }
+                .card {
+                    background: var(--card);
+                    border: 1px solid var(--border);
+                    border-radius: 14px;
+                    padding: 16px;
+                    backdrop-filter: blur(8px);
+                    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+                }
                 table { width: 100%; border-collapse: collapse; }
-                th, td { border-bottom: 1px solid #204020; padding: 8px; text-align: left; }
-                th { color: #88ff88; }
-                .hash { font-size: 12px; color: #9aff9a; }
+                th, td {
+                    border-bottom: 1px solid rgba(147, 197, 253, 0.2);
+                    padding: 11px 8px;
+                    text-align: left;
+                }
+                th { color: var(--accent); font-weight: 700; }
+                .hash { font-size: 12px; color: #bfdbfe; }
             </style>
         </head>
         <body>
@@ -1218,14 +1377,61 @@ class MiningWalletDashboard:
         <head>
             <title>Mempool - BerzCoin</title>
             <style>
-                body { background: #0a0a0a; color: #00ff00; font-family: monospace; padding: 20px; }
-                .container { max-width: 1200px; margin: 0 auto; }
-                .nav a { color: #00ff00; text-decoration: none; margin: 0 10px; }
-                .card { background: #1a1a1a; border: 1px solid #00ff00; padding: 16px; margin: 10px 0; border-radius: 5px; }
+                :root {
+                    --bg: #020617;
+                    --bg-2: #0b1233;
+                    --card: rgba(11, 18, 51, 0.78);
+                    --text: #dbeafe;
+                    --muted: #93c5fd;
+                    --accent: #22d3ee;
+                    --accent-2: #10b981;
+                    --border: rgba(34, 211, 238, 0.35);
+                }
+                * { box-sizing: border-box; }
+                body {
+                    margin: 0;
+                    min-height: 100vh;
+                    color: var(--text);
+                    font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, monospace;
+                    background:
+                        radial-gradient(900px 500px at 10% -10%, rgba(34, 211, 238, 0.16), transparent 60%),
+                        radial-gradient(900px 500px at 100% 0%, rgba(16, 185, 129, 0.14), transparent 60%),
+                        linear-gradient(180deg, var(--bg-2), var(--bg));
+                    padding: 26px;
+                }
+                .container { max-width: 1280px; margin: 0 auto; }
+                .nav {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    margin-bottom: 20px;
+                }
+                .nav a {
+                    color: var(--muted);
+                    text-decoration: none;
+                    padding: 8px 12px;
+                    border-radius: 10px;
+                    border: 1px solid transparent;
+                }
+                .nav a:hover { color: var(--text); border-color: var(--border); background: rgba(34, 211, 238, 0.08); }
+                h1 { font-size: 44px; margin: 10px 0 18px 0; letter-spacing: 0.4px; }
+                .card {
+                    background: var(--card);
+                    border: 1px solid var(--border);
+                    border-radius: 14px;
+                    padding: 16px;
+                    margin-bottom: 12px;
+                    backdrop-filter: blur(8px);
+                    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+                }
                 table { width: 100%; border-collapse: collapse; }
-                th, td { border-bottom: 1px solid #204020; padding: 8px; text-align: left; }
-                th { color: #88ff88; }
-                .hash { font-size: 12px; color: #9aff9a; }
+                th, td {
+                    border-bottom: 1px solid rgba(147, 197, 253, 0.2);
+                    padding: 11px 8px;
+                    text-align: left;
+                }
+                th { color: var(--accent); font-weight: 700; }
+                .hash { font-size: 12px; color: #bfdbfe; }
             </style>
         </head>
         <body>
@@ -1277,13 +1483,81 @@ class MiningWalletDashboard:
         <head>
             <title>Network - BerzCoin</title>
             <style>
-                body { background: #0a0a0a; color: #00ff00; font-family: monospace; padding: 20px; }
-                .container { max-width: 1200px; margin: 0 auto; }
-                .nav a { color: #00ff00; text-decoration: none; margin: 0 10px; }
-                .card { background: #1a1a1a; border: 1px solid #00ff00; padding: 16px; margin: 10px 0; border-radius: 5px; }
+                :root {
+                    --bg: #020617;
+                    --bg-2: #0b1233;
+                    --card: rgba(11, 18, 51, 0.78);
+                    --text: #dbeafe;
+                    --muted: #93c5fd;
+                    --accent: #22d3ee;
+                    --danger: #fb7185;
+                    --border: rgba(34, 211, 238, 0.35);
+                }
+                * { box-sizing: border-box; }
+                body {
+                    margin: 0;
+                    min-height: 100vh;
+                    color: var(--text);
+                    font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, monospace;
+                    background:
+                        radial-gradient(900px 500px at 10% -10%, rgba(34, 211, 238, 0.16), transparent 60%),
+                        radial-gradient(900px 500px at 100% 0%, rgba(16, 185, 129, 0.14), transparent 60%),
+                        linear-gradient(180deg, var(--bg-2), var(--bg));
+                    padding: 26px;
+                }
+                .container { max-width: 1280px; margin: 0 auto; }
+                .nav {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    margin-bottom: 20px;
+                }
+                .nav a {
+                    color: var(--muted);
+                    text-decoration: none;
+                    padding: 8px 12px;
+                    border-radius: 10px;
+                    border: 1px solid transparent;
+                }
+                .nav a:hover { color: var(--text); border-color: var(--border); background: rgba(34, 211, 238, 0.08); }
+                h1, h2 { margin: 10px 0 18px 0; letter-spacing: 0.4px; }
+                h1 { font-size: 44px; }
+                h2 { font-size: 26px; }
+                .card {
+                    background: var(--card);
+                    border: 1px solid var(--border);
+                    border-radius: 14px;
+                    padding: 16px;
+                    margin-bottom: 12px;
+                    backdrop-filter: blur(8px);
+                    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+                }
                 table { width: 100%; border-collapse: collapse; }
-                th, td { border-bottom: 1px solid #204020; padding: 8px; text-align: left; }
-                th { color: #88ff88; }
+                th, td {
+                    border-bottom: 1px solid rgba(147, 197, 253, 0.2);
+                    padding: 11px 8px;
+                    text-align: left;
+                }
+                th { color: var(--accent); font-weight: 700; }
+                input[type=text] {
+                    width: 65%;
+                    background: rgba(2, 6, 23, 0.85);
+                    color: var(--text);
+                    border: 1px solid var(--border);
+                    padding: 10px;
+                    border-radius: 10px;
+                }
+                button {
+                    background: linear-gradient(135deg, #22d3ee, #14b8a6);
+                    color: #022c22;
+                    border: 0;
+                    border-radius: 10px;
+                    padding: 8px 12px;
+                    font-weight: 700;
+                    cursor: pointer;
+                }
+                button:hover { filter: brightness(1.08); transform: translateY(-1px); }
+                .btn-reject { background: linear-gradient(135deg, #fb7185, #f43f5e); color: #fff; }
             </style>
         </head>
         <body>
@@ -1301,12 +1575,47 @@ class MiningWalletDashboard:
                         <tbody id="rows"><tr><td colspan="5">Loading...</td></tr></tbody>
                     </table>
                 </div>
+                <h2>Seed Registry</h2>
+                <div class="card">
+                    <label for="registryUrl">Registry URL:</label>
+                    <input id="registryUrl" type="text" placeholder="http://127.0.0.1:8787" />
+                    <button onclick="loadRegistry()">Load</button>
+                    <div id="registryStats" style="margin-top:10px;">Not loaded</div>
+                </div>
+                <div class="card">
+                    <table>
+                        <thead>
+                            <tr><th>Peer</th><th>Status</th><th>Reason</th><th>Reachable</th><th>Last Seen</th><th>Action</th></tr>
+                        </thead>
+                        <tbody id="registryRows"><tr><td colspan="6">No data</td></tr></tbody>
+                    </table>
+                </div>
             </div>
             <script>
+                function fmtTs(ts){ if(!ts){ return '-'; } try { return new Date(ts * 1000).toLocaleString(); } catch(e){ return String(ts); } }
                 async function loadPeers() {
                     const res = await fetch('/api/network/peers');
                     const data = await res.json();
-                    document.getElementById('stats').innerHTML = `Connected peers: ${data.connected || 0}`;
+                    let admissionSummary = '';
+                    try {
+                        const authRes = await fetch('/api/authority/chain');
+                        const auth = await authRes.json();
+                        if (auth && auth.enabled) {
+                            const m = auth.admission_metrics || {};
+                            const pending = m.pending_join_count || 0;
+                            const avgLatency = Math.round(m.verify_latency_ms_avg || 0);
+                            const samples = m.verify_latency_samples || 0;
+                            const rejectCount = Object.values(m.rejection_reasons || {}).reduce((a, b) => a + Number(b || 0), 0);
+                            const activeVerifiers = Object.keys(m.verifier_activity || {}).length;
+                            admissionSummary =
+                                ` | pending_joins=${pending}` +
+                                `, verify_latency_avg_ms=${avgLatency}` +
+                                `, latency_samples=${samples}` +
+                                `, rejections=${rejectCount}` +
+                                `, active_verifiers=${activeVerifiers}`;
+                        }
+                    } catch (e) {}
+                    document.getElementById('stats').innerHTML = `Connected peers: ${data.connected || 0}${admissionSummary}`;
                     const rows = (data.peers || []).map(p => `
                         <tr>
                             <td>${p.address}</td>
@@ -1318,8 +1627,66 @@ class MiningWalletDashboard:
                     `).join('');
                     document.getElementById('rows').innerHTML = rows || '<tr><td colspan="5">No peers</td></tr>';
                 }
+                async function approvePeer(peer) {
+                    const url = (document.getElementById('registryUrl').value || '').trim();
+                    await fetch('/api/network/registry/approve', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({url, peer})
+                    });
+                    await loadRegistry();
+                }
+                async function rejectPeer(peer) {
+                    const url = (document.getElementById('registryUrl').value || '').trim();
+                    const reason = prompt('Reject reason', 'manual_reject') || 'manual_reject';
+                    await fetch('/api/network/registry/reject', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({url, peer, reason})
+                    });
+                    await loadRegistry();
+                }
+                function _registryRowsFromList(items) {
+                    return (items || []).map(p => `
+                        <tr>
+                            <td>${p.peer || ''}</td>
+                            <td>${p.status || ''}</td>
+                            <td>${p.reason || ''}</td>
+                            <td>${p.reachable ? 'yes' : 'no'}</td>
+                            <td>${fmtTs(p.last_seen)}</td>
+                            <td>
+                                <button onclick="approvePeer('${(p.peer || '').replace(/'/g, "\\'")}')" style="margin-right:6px;">Approve</button>
+                                <button class="btn-reject" onclick="rejectPeer('${(p.peer || '').replace(/'/g, "\\'")}')">Reject</button>
+                            </td>
+                        </tr>
+                    `).join('');
+                }
+                async function loadRegistry() {
+                    const input = document.getElementById('registryUrl');
+                    const url = (input.value || '').trim();
+                    const qs = url ? ('?url=' + encodeURIComponent(url)) : '';
+                    const res = await fetch('/api/network/registry' + qs);
+                    const data = await res.json();
+                    if (!url && data.registry_url) {
+                        input.value = data.registry_url;
+                    }
+                    if (!data.connected) {
+                        document.getElementById('registryStats').innerHTML = `Registry error: ${data.error || 'unknown'}`;
+                        document.getElementById('registryRows').innerHTML = '<tr><td colspan="6">No registry data</td></tr>';
+                        return;
+                    }
+                    const approved = data.approved || [];
+                    const pending = data.pending || [];
+                    const rejected = data.rejected || [];
+                    document.getElementById('registryStats').innerHTML =
+                        `Registry: ${data.registry_url} | approved=${approved.length}, pending=${pending.length}, rejected=${rejected.length}`;
+                    const rows = _registryRowsFromList(approved.concat(pending).concat(rejected));
+                    document.getElementById('registryRows').innerHTML = rows || '<tr><td colspan="6">No peers in registry</td></tr>';
+                }
                 loadPeers();
                 setInterval(loadPeers, 3000);
+                loadRegistry();
+                setInterval(loadRegistry, 8000);
             </script>
         </body>
         </html>

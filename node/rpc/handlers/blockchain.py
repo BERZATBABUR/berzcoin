@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from shared.consensus.pow import ProofOfWork
 from shared.utils.logging import get_logger
+from node.rpc.errors import RPCError, invalid_params
 
 logger = get_logger()
 
@@ -42,10 +43,14 @@ class BlockchainHandlers:
 
     async def get_block(self, block_hash: str, verbosity: int = 1) -> Any:
         chain = self.node.chainstate
+        if not isinstance(block_hash, str) or not block_hash.strip():
+            raise invalid_params("block hash is required")
+        if int(verbosity) < 0 or int(verbosity) > 2:
+            raise invalid_params("verbosity must be 0, 1, or 2")
         block = chain.get_block(block_hash)
 
         if not block:
-            return {'error': f'Block not found: {block_hash}'}
+            raise RPCError(-32000, f'Block not found: {block_hash}')
 
         height = chain.get_height(block_hash)
         if height is None:
@@ -96,10 +101,12 @@ class BlockchainHandlers:
 
     async def get_block_header(self, block_hash: str) -> Dict[str, Any]:
         chain = self.node.chainstate
+        if not isinstance(block_hash, str) or not block_hash.strip():
+            raise invalid_params("block hash is required")
         header = chain.get_header_by_hash(block_hash)
 
         if not header:
-            return {'error': f'Block header not found: {block_hash}'}
+            raise RPCError(-32000, f'Block header not found: {block_hash}')
 
         height = chain.get_height(block_hash)
         if height is None:
@@ -129,10 +136,12 @@ class BlockchainHandlers:
 
     async def get_block_hash(self, height: int) -> str:
         chain = self.node.chainstate
+        if int(height) < 0:
+            raise invalid_params("height must be non-negative")
         block = chain.get_block_by_height(height)
 
         if not block:
-            raise ValueError(f'Block not found at height {height}')
+            raise RPCError(-32000, f'Block not found at height {height}')
 
         return block.header.hash_hex()
 
@@ -141,7 +150,7 @@ class BlockchainHandlers:
         block = chain.get_block(block_hash)
 
         if not block:
-            return {'error': f'Block not found: {block_hash}'}
+            raise RPCError(-32000, f'Block not found: {block_hash}')
 
         h = chain.get_height(block_hash)
 
@@ -220,6 +229,70 @@ class BlockchainHandlers:
                 }
 
         return None
+
+    async def get_raw_transaction(self, txid: str, verbose: bool = False) -> Any:
+        """Return raw tx hex, searching mempool first then confirmed chain data."""
+        if not isinstance(txid, str) or not txid.strip():
+            raise invalid_params("txid is required")
+        txid = txid.strip().lower()
+        if len(txid) != 64:
+            raise invalid_params("txid must be 64 hex chars")
+
+        mempool = getattr(self.node, "mempool", None)
+        if mempool is not None:
+            tx = await mempool.get_transaction(txid)
+            if tx is not None:
+                tx_hex = tx.serialize().hex()
+                if not verbose:
+                    return tx_hex
+                return {
+                    "txid": txid,
+                    "hex": tx_hex,
+                    "confirmations": 0,
+                    "in_mempool": True,
+                }
+
+        chain = self.node.chainstate
+        tx_info = None
+        indexer = getattr(self.node, "tx_indexer", None)
+        if indexer is not None and hasattr(indexer, "get_transaction"):
+            tx_info = indexer.get_transaction(txid)
+        if tx_info is None and hasattr(chain, "get_transaction"):
+            tx_info = chain.get_transaction(txid)
+        if tx_info is None:
+            raise RPCError(-32000, f"Transaction not found: {txid}")
+
+        block_hash = str(tx_info.get("block_hash", "") or "")
+        block = chain.get_block(block_hash) if block_hash else None
+        if block is None:
+            raise RPCError(-32000, f"Transaction index points to missing block: {txid}")
+
+        target_tx = None
+        tx_index = tx_info.get("block_tx_index")
+        if tx_index is not None:
+            i = int(tx_index)
+            if 0 <= i < len(block.transactions):
+                candidate = block.transactions[i]
+                if candidate.txid().hex() == txid:
+                    target_tx = candidate
+        if target_tx is None:
+            for tx in block.transactions:
+                if tx.txid().hex() == txid:
+                    target_tx = tx
+                    break
+        if target_tx is None:
+            raise RPCError(-32000, f"Transaction not found in indexed block: {txid}")
+
+        tx_hex = target_tx.serialize().hex()
+        if not verbose:
+            return tx_hex
+        return {
+            "txid": txid,
+            "hex": tx_hex,
+            "confirmations": int(chain.get_confirmations(txid)),
+            "blockhash": block_hash,
+            "in_mempool": False,
+        }
 
     def _get_difficulty(self) -> float:
         hdr = self._best_header()

@@ -14,12 +14,23 @@ class VersionHandshake:
     PROTOCOL_VERSION = 70015
     MIN_PROTOCOL_VERSION = 70001
 
-    def __init__(self, local_services: int = 1, user_agent: str = "/BerzCoin:1.0/",
-                 start_height: int = 0, relay: bool = True):
+    def __init__(
+        self,
+        local_services: int = 1,
+        user_agent: str = "/BerzCoin:1.0/",
+        start_height: int = 0,
+        relay: bool = True,
+        expected_network: str = "",
+        node_id: str = "",
+        best_block_hash: str = "",
+    ):
         self.local_services = local_services
         self.user_agent = user_agent
         self.start_height = start_height
         self.relay = relay
+        self.expected_network = str(expected_network or "")
+        self.node_id = str(node_id or "")
+        self.best_block_hash = str(best_block_hash or "")
         self.nonce = secrets.randbits(64)
 
         self.remote_version: Optional[VersionMessage] = None
@@ -42,17 +53,22 @@ class VersionHandshake:
             user_agent=self.user_agent,
             start_height=self.start_height,
             relay=self.relay,
+            network=self.expected_network,
+            node_id=self.node_id,
+            best_block_hash=self.best_block_hash,
         )
 
     def process_version(self, version: VersionMessage) -> Tuple[bool, Optional[str]]:
         self.remote_version = version
+        if self.expected_network and str(version.network or "") and str(version.network) != self.expected_network:
+            return False, f"Wrong network: expected={self.expected_network} got={version.network}"
         if version.version < self.MIN_PROTOCOL_VERSION:
             return False, f"Protocol version too old: {version.version}"
         if version.version > self.PROTOCOL_VERSION:
             logger.warning(f"Peer version {version.version} newer than ours")
         logger.info(
             f"Peer version: {version.version}, user agent: {version.user_agent}, "
-            f"height: {version.start_height}"
+            f"height: {version.start_height}, network: {version.network or 'unknown'}"
         )
         return True, None
 

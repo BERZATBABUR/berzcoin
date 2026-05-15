@@ -33,6 +33,9 @@ class VersionMessage:
     user_agent: str = "/BerzCoin:1.0/"
     start_height: int = 0
     relay: bool = True
+    network: str = ""
+    node_id: str = ""
+    best_block_hash: str = ""
 
     def serialize(self) -> bytes:
         """Serialize version message."""
@@ -52,6 +55,10 @@ class VersionMessage:
         result += Serializer.write_string(self.user_agent)
         result += Serializer.write_uint32(self.start_height)
         result += Serializer.write_uint8(1 if self.relay else 0)
+        # Extended handshake metadata (optional for backward compatibility).
+        result += Serializer.write_string(self.network)
+        result += Serializer.write_string(self.node_id)
+        result += Serializer.write_string(self.best_block_hash)
 
         return result
 
@@ -74,6 +81,15 @@ class VersionMessage:
         user_agent, offset = Serializer.read_string(data, offset)
         start_height, offset = Serializer.read_uint32(data, offset)
         relay, offset = Serializer.read_uint8(data, offset)
+        network = ""
+        node_id = ""
+        best_block_hash = ""
+        if offset < len(data):
+            network, offset = Serializer.read_string(data, offset)
+        if offset < len(data):
+            node_id, offset = Serializer.read_string(data, offset)
+        if offset < len(data):
+            best_block_hash, offset = Serializer.read_string(data, offset)
 
         return cls(
             version=version,
@@ -88,7 +104,10 @@ class VersionMessage:
             nonce=nonce,
             user_agent=user_agent,
             start_height=start_height,
-            relay=bool(relay)
+            relay=bool(relay),
+            network=network,
+            node_id=node_id,
+            best_block_hash=best_block_hash,
         ), offset
 
 @dataclass
@@ -492,3 +511,133 @@ class BlockTxnMessage:
             tx_bytes, offset = Serializer.read_bytes(data, offset, tx_len)
             txs.append(tx_bytes)
         return cls(block_hash=block_hash, transactions=txs), offset
+
+
+@dataclass
+class JoinRequestMessage:
+    """Admission join request from candidate node."""
+
+    node_id: str = ""
+    pubkey: str = ""
+    listen_port: int = 0
+    nonce: int = 0
+    timestamp: int = 0
+
+    def serialize(self) -> bytes:
+        result = Serializer.write_string(self.node_id)
+        result += Serializer.write_string(self.pubkey)
+        result += Serializer.write_uint16(int(self.listen_port))
+        result += Serializer.write_uint64(int(self.nonce))
+        result += Serializer.write_uint64(int(self.timestamp))
+        return result
+
+    @classmethod
+    def deserialize(cls, data: bytes, offset: int = 0) -> Tuple["JoinRequestMessage", int]:
+        node_id, offset = Serializer.read_string(data, offset)
+        pubkey, offset = Serializer.read_string(data, offset)
+        listen_port, offset = Serializer.read_uint16(data, offset)
+        nonce, offset = Serializer.read_uint64(data, offset)
+        timestamp, offset = Serializer.read_uint64(data, offset)
+        return cls(
+            node_id=node_id,
+            pubkey=pubkey,
+            listen_port=listen_port,
+            nonce=nonce,
+            timestamp=timestamp,
+        ), offset
+
+
+@dataclass
+class JoinChallengeMessage:
+    """Admission challenge sent by verifier/acceptor."""
+
+    challenge_id: int = 0
+    challenge: bytes = b""
+    expires_at: int = 0
+
+    def serialize(self) -> bytes:
+        result = Serializer.write_uint64(int(self.challenge_id))
+        result += Serializer.write_bytes(self.challenge)
+        result += Serializer.write_uint64(int(self.expires_at))
+        return result
+
+    @classmethod
+    def deserialize(cls, data: bytes, offset: int = 0) -> Tuple["JoinChallengeMessage", int]:
+        challenge_id, offset = Serializer.read_uint64(data, offset)
+        ch_len, offset = Serializer.read_varint(data, offset)
+        challenge, offset = Serializer.read_bytes(data, offset, ch_len)
+        expires_at, offset = Serializer.read_uint64(data, offset)
+        return cls(challenge_id=challenge_id, challenge=challenge, expires_at=expires_at), offset
+
+
+@dataclass
+class JoinAttestMessage:
+    """Attestation reply proving candidate identity/challenge possession."""
+
+    candidate_node_id: str = ""
+    verifier_node_id: str = ""
+    verifier_pubkey: str = ""
+    challenge_id: int = 0
+    signature: bytes = b""
+    timestamp: int = 0
+
+    def serialize(self) -> bytes:
+        result = Serializer.write_string(self.candidate_node_id)
+        result += Serializer.write_string(self.verifier_node_id)
+        result += Serializer.write_string(self.verifier_pubkey)
+        result += Serializer.write_uint64(int(self.challenge_id))
+        result += Serializer.write_bytes(self.signature)
+        result += Serializer.write_uint64(int(self.timestamp))
+        return result
+
+    @classmethod
+    def deserialize(cls, data: bytes, offset: int = 0) -> Tuple["JoinAttestMessage", int]:
+        candidate_node_id, offset = Serializer.read_string(data, offset)
+        verifier_node_id, offset = Serializer.read_string(data, offset)
+        verifier_pubkey, offset = Serializer.read_string(data, offset)
+        challenge_id, offset = Serializer.read_uint64(data, offset)
+        sig_len, offset = Serializer.read_varint(data, offset)
+        signature, offset = Serializer.read_bytes(data, offset, sig_len)
+        timestamp, offset = Serializer.read_uint64(data, offset)
+        return cls(
+            candidate_node_id=candidate_node_id,
+            verifier_node_id=verifier_node_id,
+            verifier_pubkey=verifier_pubkey,
+            challenge_id=challenge_id,
+            signature=signature,
+            timestamp=timestamp,
+        ), offset
+
+
+@dataclass
+class JoinResultMessage:
+    """Admission decision response."""
+
+    accepted: bool = False
+    code: int = 0
+    reason: str = ""
+    required_votes: int = 0
+    received_votes: int = 0
+
+    def serialize(self) -> bytes:
+        result = Serializer.write_uint8(1 if self.accepted else 0)
+        result += Serializer.write_uint8(int(self.code) & 0xFF)
+        result += Serializer.write_string(self.reason)
+        result += Serializer.write_uint16(int(self.required_votes))
+        result += Serializer.write_uint16(int(self.received_votes))
+        return result
+
+    @classmethod
+    def deserialize(cls, data: bytes, offset: int = 0) -> Tuple["JoinResultMessage", int]:
+        accepted, offset = Serializer.read_uint8(data, offset)
+        code, offset = Serializer.read_uint8(data, offset)
+        reason, offset = Serializer.read_string(data, offset)
+        required_votes, offset = Serializer.read_uint16(data, offset)
+        received_votes, offset = Serializer.read_uint16(data, offset)
+        return cls(
+            accepted=bool(accepted),
+            code=code,
+            reason=reason,
+            required_votes=required_votes,
+            received_votes=received_votes,
+        ), offset

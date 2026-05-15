@@ -96,6 +96,13 @@ class TestMempoolPersistenceRestart(unittest.TestCase):
                 await n2._restore_mempool_from_disk()
 
                 self.assertIn(tx.txid().hex(), n2.mempool.transactions)
+                # The exact same signed transaction remains policy-valid after restart
+                # when chainstate/UTXO view is unchanged.
+                restored = n2.mempool.transactions[tx.txid().hex()].tx
+                self.assertEqual(
+                    restored.serialize(include_witness=True),
+                    tx.serialize(include_witness=True),
+                )
 
         asyncio.run(run())
 

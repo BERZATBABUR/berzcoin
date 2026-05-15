@@ -31,20 +31,17 @@ class DisconnectBlock:
             with self.utxo_store.db.transaction():
                 for tx in reversed(block.transactions):
                     if not tx.is_coinbase():
-                        for txin in tx.vin:
+                        for in_idx, txin in enumerate(tx.vin):
                             original = self.utxo_store.db.fetch_one("""
-                                SELECT o.value, o.script_pubkey, t.height, t.is_coinbase
-                                FROM outputs o
-                                JOIN transactions t ON t.txid = o.txid
-                                WHERE o.txid = ? AND o."index" = ?
-                            """, (txin.prev_tx_hash.hex(), txin.prev_tx_index))
+                                SELECT value, script_pubkey, address, height, is_coinbase
+                                FROM block_undo
+                                WHERE block_hash = ? AND txid = ? AND input_index = ?
+                            """, (block.header.hash_hex(), tx.txid().hex(), in_idx))
                             if not original:
-                                logger.error(
-                                    "Missing previous output while disconnecting %s:%s",
-                                    txin.prev_tx_hash.hex(),
-                                    txin.prev_tx_index,
+                                raise RuntimeError(
+                                    "Missing undo data while disconnecting "
+                                    f"{tx.txid().hex()}[{in_idx}]"
                                 )
-                                return False
                             self.utxo_store.add_utxo(
                                 txid=txin.prev_tx_hash.hex(),
                                 index=txin.prev_tx_index,
@@ -53,6 +50,10 @@ class DisconnectBlock:
                                 height=int(original["height"]),
                                 is_coinbase=bool(original["is_coinbase"]),
                             )
+                            self.utxo_store.db.execute("""
+                                UPDATE utxo SET address = ?
+                                WHERE txid = ? AND "index" = ?
+                            """, (original.get("address"), txin.prev_tx_hash.hex(), txin.prev_tx_index))
                             self.utxo_store.db.execute("""
                                 UPDATE outputs
                                 SET spent = 0, spent_by_txid = NULL, spent_by_index = NULL
@@ -66,6 +67,10 @@ class DisconnectBlock:
                             WHERE txid = ? AND "index" = ?
                         """, (tx.txid().hex(), i))
                 self.block_index.mark_main_chain(block.header.hash_hex(), False)
+                self.utxo_store.db.execute(
+                    "DELETE FROM block_undo WHERE block_hash = ?",
+                    (block.header.hash_hex(),),
+                )
             logger.debug(f"Block {height} disconnected successfully")
             return True
         except Exception as e:

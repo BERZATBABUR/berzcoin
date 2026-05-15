@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from shared.core.transaction import Transaction
 from shared.utils.logging import get_logger
+from node.utils.crash_injection import maybe_crash
 from node.mempool.pool import MempoolEntry
 
 logger = get_logger()
@@ -80,6 +81,7 @@ class MempoolStore:
             with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(envelope, f, sort_keys=True, separators=(",", ":"))
                 f.flush()
+            maybe_crash("during_mempool_flush")
             tmp_file.replace(self.mempool_file)
             return True
         except Exception as e:

@@ -14,6 +14,21 @@ echo $$ > "${WATCHDOG_PID_FILE}"
 
 echo "[$(date -Is)] watchdog start conf=${CONF_PATH}" >> "${WATCHDOG_LOG}"
 
+cleanup() {
+  if [[ -f "${NODE_PID_FILE}" ]]; then
+    PID="$(cat "${NODE_PID_FILE}" 2>/dev/null || true)"
+    if [[ -n "${PID}" ]] && kill -0 "${PID}" 2>/dev/null; then
+      kill "${PID}" 2>/dev/null || true
+      wait "${PID}" 2>/dev/null || true
+    fi
+    rm -f "${NODE_PID_FILE}"
+  fi
+  rm -f "${WATCHDOG_PID_FILE}"
+  echo "[$(date -Is)] watchdog stop" >> "${WATCHDOG_LOG}"
+}
+
+trap cleanup EXIT INT TERM
+
 while true; do
   echo "[$(date -Is)] starting node" >> "${WATCHDOG_LOG}"
   (

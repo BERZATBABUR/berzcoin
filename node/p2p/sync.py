@@ -141,50 +141,21 @@ class BlockSync:
         self._pending_block_requests.pop(block_hash, None)
         self._cleanup_stale_requests()
         self.orphanage.cleanup_expired()
-        if self.block_handler is not None:
-            accepted, _bh, reason = await self.block_handler(
-                block,
-                peer.address if peer else None,
-                False,
-            )
-            if accepted or reason in ("known", "stored_fork"):
-                return True
-            if reason == "orphan":
-                self.orphanage.add_orphan(block, source_peer=peer.address if peer else None)
-                return True
-            logger.error("Rejected block %s: %s", block_hash[:16], reason)
+        if self.block_handler is None:
+            logger.error("BlockSync requires unified block_handler; refusing local block-connect fallback")
             return False
-
-        height = self.chainstate.get_height(block_hash)
-        if height is not None:
+        accepted, _bh, reason = await self.block_handler(
+            block,
+            peer.address if peer else None,
+            False,
+        )
+        if accepted or reason in ("known", "stored_fork"):
             return True
-        expected_height = self.chainstate.get_best_height() + 1
-        prev_hash = block.header.prev_block_hash.hex()
-        if self.chainstate.get_best_block_hash() == prev_hash:
-            if self.chainstate.validate_block_stateful(block, expected_height):
-                from node.validation.connect import ConnectBlock
-                block_work = self.chainstate.chainwork.calculate_chain_work([block.header])
-                chainwork_total = self.chainstate.get_best_chainwork() + block_work
-                self.chainstate.blocks_store.write_block(block, expected_height)
-                self.chainstate.block_index.add_block(block, expected_height, chainwork_total)
-                connect = ConnectBlock(
-                    self.chainstate.utxo_store,
-                    self.chainstate.block_index,
-                    network=self.chainstate.params.get_network_name(),
-                )
-                if connect.connect(block):
-                    self.chainstate.set_best_block(block_hash, expected_height, chainwork_total)
-                    self.chainstate.header_chain.add_header(block.header, expected_height, chainwork_total)
-                    if self.mempool is not None:
-                        await self.mempool.handle_connected_block(block)
-                    logger.info(f"Connected block {expected_height}: {block_hash[:16]}")
-                    await self._process_orphan_children(peer, block_hash)
-                    return True
-            logger.error(f"Invalid block at height {expected_height}")
-            return False
-        self.orphanage.add_orphan(block, source_peer=peer.address if peer else None)
-        logger.debug(f"Orphan block: {block_hash[:16]}, waiting for parent {prev_hash[:16]}")
-        return True
+        if reason == "orphan":
+            self.orphanage.add_orphan(block, source_peer=peer.address if peer else None)
+            return True
+        logger.error("Rejected block %s: %s", block_hash[:16], reason)
+        return False
 
     async def _process_orphan_children(self, peer: Peer, parent_hash: str) -> None:
         """Try to connect orphan descendants once a parent is connected."""

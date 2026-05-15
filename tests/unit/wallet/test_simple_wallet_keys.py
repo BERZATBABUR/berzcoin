@@ -1,9 +1,9 @@
 """Unit tests for simple-wallet private-key normalization and activation."""
 
 import tempfile
-import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from node.wallet.simple_wallet import SimpleWallet, SimpleWalletManager
 
@@ -16,13 +16,13 @@ class TestSimpleWalletKeys(unittest.TestCase):
 
     def test_manager_rejects_invalid_private_key_hex(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            manager = SimpleWalletManager(Path(tmp))
+            manager = SimpleWalletManager(Path(tmp), wallet_passphrase="unit-test-passphrase")
             with self.assertRaises(ValueError):
                 manager.activate_wallet("not-hex")
 
     def test_manager_rejects_out_of_range_private_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            manager = SimpleWalletManager(Path(tmp))
+            manager = SimpleWalletManager(Path(tmp), wallet_passphrase="unit-test-passphrase")
             with self.assertRaises(ValueError):
                 manager.activate_wallet("0")
 
@@ -46,9 +46,13 @@ class TestSimpleWalletKeys(unittest.TestCase):
             wallet = manager.create_wallet()
             manager.activate_wallet(wallet.private_key_hex)
             self.assertTrue(manager.is_wallet_unlocked())
-            time.sleep(1.2)
-            self.assertFalse(manager.is_wallet_unlocked())
-            self.assertIsNone(manager.get_active_private_key())
+            t0 = 1_700_000_000.0
+            with patch("time.time", return_value=t0):
+                manager._unlocked_until = t0 + 1.0
+                self.assertTrue(manager.is_wallet_unlocked())
+            with patch("time.time", return_value=t0 + 1.2):
+                self.assertFalse(manager.is_wallet_unlocked())
+                self.assertIsNone(manager.get_active_private_key())
 
 
 if __name__ == "__main__":

@@ -4,15 +4,27 @@ import asyncio
 import random
 import ipaddress
 import time
+import secrets
+import json
 from typing import Any, List, Dict, Set, Optional, Callable
 from pathlib import Path
 from shared.utils.logging import get_logger
+from shared.core.hashes import hash256
+from shared.crypto.keys import PrivateKey, PublicKey
+from shared.crypto.signatures import sign_message_hash, verify_signature
 from .peer import Peer
 from .addrman import AddrMan
 from .dns_seeds import DNSSeeds
 from .authority import NodeAuthorityChain
 from .peer_scoring import PeerScoringManager
 from .limits import OutboundClass, OutboundPolicy
+from node.storage.authority_store import AuthorityStore
+from shared.protocol.messages import (
+    JoinAttestMessage,
+    JoinChallengeMessage,
+    JoinRequestMessage,
+    JoinResultMessage,
+)
 
 logger = get_logger()
 
@@ -66,11 +78,117 @@ class ConnectionManager:
             self.node_config.get("authority_chain_enabled", False)
         ) if self.node_config else False
         trusted = self.node_config.get("authority_trusted_nodes", []) if self.node_config else []
-        self.authority_chain = NodeAuthorityChain(trusted_nodes=trusted)
+        admission_mode = (
+            self.node_config.get_admission_mode()
+            if self.node_config and hasattr(self.node_config, "get_admission_mode")
+            else "open"
+        )
+        min_votes = (
+            self.node_config.get_min_verifier_votes()
+            if self.node_config and hasattr(self.node_config, "get_min_verifier_votes")
+            else 1
+        )
+        authority_store = None
+        if self.node_config and hasattr(self.node_config, "get_datadir"):
+            authority_store = AuthorityStore(self.node_config.get_datadir())
+        self.authority_chain = NodeAuthorityChain(
+            trusted_nodes=trusted,
+            min_verifier_votes=min_votes,
+            admission_mode=admission_mode,
+            store=authority_store,
+        )
         self._last_getaddr_at: Dict[str, float] = {}
         self._getaddr_interval_secs = 180
         self._last_feeler_at = 0.0
         self._last_rotation_at = 0.0
+        self._admission_challenges: Dict[str, Dict[str, Any]] = {}
+        self._admission_rejection_reasons: Dict[str, int] = {}
+        self._admission_verifier_activity: Dict[str, int] = {}
+        self._admission_verify_latency_sum_ms: float = 0.0
+        self._admission_verify_latency_count: int = 0
+        self._seen_attest_challenges: Dict[str, int] = {}
+        self._join_req_window_secs = 60
+        self._join_req_max_per_host = 20
+        self._join_req_times_by_host: Dict[str, List[float]] = {}
+        self._attestation_max_skew_secs = 300
+        self._peer_violation_counts: Dict[str, int] = {}
+        self._peer_violation_disconnect_threshold = 3
+        self._maintain_loop_interval_secs = 5
+        self._reconnect_backoff_secs = 30
+        self._max_message_size = 2_000_000
+        self._handshake_timeout_secs = 30
+        self._connect_timeout_secs = 10
+        self._read_timeout_secs = 30
+        self._write_timeout_secs = 15
+        self._idle_timeout_secs = 180
+        self._partial_message_timeout_secs = 10
+        self._min_read_progress_bytes = 1
+        self._ban_score_threshold = 100
+        self._inv_max_items = 50_000
+        self._getdata_max_items = 50_000
+        self._apply_config_limits()
+        self._disconnect_reasons: Dict[str, int] = {}
+        self.chainstate: Optional[Any] = None
+        self._identity_path: Optional[Path] = None
+        self._node_private_key: Optional[PrivateKey] = None
+        self._node_pubkey_hex: str = ""
+        self._node_id: str = ""
+        self._load_or_create_node_identity()
+
+    def _apply_config_limits(self) -> None:
+        if not self.node_config:
+            return
+        self.max_connections = int(self.node_config.get("maxconnections", self.max_connections))
+        self.max_outbound = int(self.node_config.get("maxoutbound", self.max_outbound))
+        self._max_message_size = int(self.node_config.get("p2p_max_message_size", self._max_message_size))
+        self._handshake_timeout_secs = int(
+            self.node_config.get("p2p_handshake_timeout_secs", self._handshake_timeout_secs)
+        )
+        self._connect_timeout_secs = int(
+            self.node_config.get("p2p_connect_timeout_secs", self._connect_timeout_secs)
+        )
+        self._read_timeout_secs = int(
+            self.node_config.get("p2p_read_timeout_secs", self._read_timeout_secs)
+        )
+        self._write_timeout_secs = int(
+            self.node_config.get("p2p_write_timeout_secs", self._write_timeout_secs)
+        )
+        self._idle_timeout_secs = int(
+            self.node_config.get("p2p_idle_timeout_secs", self._idle_timeout_secs)
+        )
+        self._partial_message_timeout_secs = int(
+            self.node_config.get("p2p_partial_message_timeout_secs", self._partial_message_timeout_secs)
+        )
+        self._min_read_progress_bytes = int(
+            self.node_config.get("p2p_min_read_progress_bytes", self._min_read_progress_bytes)
+        )
+        self._peer_discover_interval_secs = int(
+            self.node_config.get("p2p_peer_discover_interval_secs", self._peer_discover_interval_secs)
+        )
+        self._getaddr_interval_secs = int(
+            self.node_config.get("p2p_getaddr_interval_secs", self._getaddr_interval_secs)
+        )
+        self._join_req_window_secs = int(
+            self.node_config.get("p2p_join_req_window_secs", self._join_req_window_secs)
+        )
+        self._join_req_max_per_host = int(
+            self.node_config.get("p2p_join_req_max_per_host", self._join_req_max_per_host)
+        )
+        self._attestation_max_skew_secs = int(
+            self.node_config.get("p2p_attestation_max_skew_secs", self._attestation_max_skew_secs)
+        )
+        self._peer_violation_disconnect_threshold = int(
+            self.node_config.get("p2p_violation_disconnect_threshold", self._peer_violation_disconnect_threshold)
+        )
+        self._maintain_loop_interval_secs = int(
+            self.node_config.get("p2p_maintain_loop_interval_secs", self._maintain_loop_interval_secs)
+        )
+        self._reconnect_backoff_secs = int(
+            self.node_config.get("p2p_reconnect_backoff_secs", self._reconnect_backoff_secs)
+        )
+        self._ban_score_threshold = int(self.node_config.get("p2p_ban_score_threshold", self._ban_score_threshold))
+        self._inv_max_items = int(self.node_config.get("p2p_inv_max_items", self._inv_max_items))
+        self._getdata_max_items = int(self.node_config.get("p2p_getdata_max_items", self._getdata_max_items))
 
     @staticmethod
     def _split_host_port(address: str, default_port: int) -> tuple[str, int]:
@@ -102,6 +220,78 @@ class ConnectionManager:
         if self.node_config:
             return int(self.node_config.get("port", 8333))
         return 8333
+
+    def _load_or_create_node_identity(self) -> None:
+        datadir = None
+        if self.node_config and hasattr(self.node_config, "get_datadir"):
+            datadir = Path(self.node_config.get_datadir())
+        if datadir is None:
+            return
+        self._identity_path = datadir / "node_identity.json"
+        payload: Dict[str, Any] = {}
+        if self._identity_path.exists():
+            try:
+                payload = json.loads(self._identity_path.read_text(encoding="utf-8"))
+            except Exception:
+                payload = {}
+        priv_hex = str(payload.get("private_key_hex", "")).strip()
+        node_id = str(payload.get("node_id", "")).strip()
+        try:
+            if priv_hex:
+                self._node_private_key = PrivateKey(int(priv_hex, 16))
+            else:
+                self._node_private_key = PrivateKey()
+        except Exception:
+            self._node_private_key = PrivateKey()
+        pubkey = self._node_private_key.public_key().to_bytes(compressed=True).hex()
+        self._node_pubkey_hex = pubkey
+        self._node_id = node_id or f"node:{pubkey[:16]}"
+        save_payload = {
+            "node_id": self._node_id,
+            "public_key_hex": self._node_pubkey_hex,
+            "private_key_hex": self._node_private_key.to_hex(),
+            "created_at": int(time.time()),
+        }
+        try:
+            datadir.mkdir(parents=True, exist_ok=True)
+            self._identity_path.write_text(json.dumps(save_payload, indent=2) + "\n", encoding="utf-8")
+            try:
+                self._identity_path.chmod(0o600)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning("Failed to persist node identity: %s", e)
+
+    def _build_join_attestation_hash(
+        self,
+        candidate_node_id: str,
+        candidate_pubkey_hex: str,
+        challenge_id: int,
+        challenge: bytes,
+    ) -> bytes:
+        material = (
+            str(candidate_node_id).encode("utf-8")
+            + b"|"
+            + str(candidate_pubkey_hex).encode("ascii", errors="ignore")
+            + b"|"
+            + int(challenge_id).to_bytes(8, "big", signed=False)
+            + b"|"
+            + bytes(challenge or b"")
+        )
+        return hash256(material)
+
+    def _is_verifier_ready(self) -> bool:
+        if not self.authority_chain_enabled:
+            return True
+        if self.chainstate is None:
+            return False
+        best_peer = self.get_best_height_peer()
+        if best_peer is None:
+            return True
+        local = int(self.chainstate.get_best_height())
+        remote = int(best_peer.peer_height)
+        lag = max(0, remote - local)
+        return lag <= 2
 
     def _load_peers_from_config(self) -> None:
         if not self.node_config:
@@ -286,12 +476,27 @@ class ConnectionManager:
                 if self.network_hardening:
                     await self._maybe_run_feeler()
                     await self._maybe_rotate_outbound()
-                await asyncio.sleep(5)
+                await self._drop_idle_peers()
+                await asyncio.sleep(max(1, int(self._maintain_loop_interval_secs)))
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Error maintaining connections: {e}")
-                await asyncio.sleep(30)
+                await asyncio.sleep(max(1, int(self._reconnect_backoff_secs)))
+
+    async def _drop_idle_peers(self) -> None:
+        now = asyncio.get_event_loop().time()
+        timeout = float(max(1, int(self._idle_timeout_secs)))
+        for peer in list(self.peers.values()):
+            if not peer.connected:
+                continue
+            last_message = float(getattr(peer, "last_message_at", 0.0) or 0.0)
+            if last_message <= 0:
+                continue
+            if now - last_message <= timeout:
+                continue
+            self.peer_scores.record_bad(peer.address, "stale_peer")
+            await peer.disconnect(reason="idle_timeout")
 
     async def _connect_outbound(self, count: int) -> None:
         connected = 0
@@ -352,15 +557,20 @@ class ConnectionManager:
         if not host:
             return False
         peer = Peer(host, int(port), is_outbound=True)
+        self._configure_peer_runtime(peer)
         peer.on_message = self.on_message
         peer.on_disconnect = self._on_peer_disconnect
+        peer.on_protocol_violation = self._on_peer_protocol_violation
         self._pending_outbound_class[peer.address] = outbound_class
         if await peer.connect():
             self._add_peer(peer)
             self.peer_scores.record_good(peer.address)
             self.addrman.mark_good(peer.address)
             if self.authority_chain_enabled:
-                self.authority_chain.verify_from_local(peer.address)
+                # In strict mode, avoid permissive local auto-verification.
+                if self.authority_chain.admission_mode != "strict":
+                    self.authority_chain.verify_from_local(peer.address)
+                await self.send_join_request(peer)
             if self.network_hardening and outbound_class == OutboundClass.ANCHOR:
                 self.addrman.add_anchor_peer(peer.address)
             logger.info("Connected to %s (%s)", peer.address, outbound_class)
@@ -415,14 +625,60 @@ class ConnectionManager:
             self.on_peer_connected(peer)
 
     async def _on_peer_disconnect(self, peer: Peer) -> None:
+        reason = str(getattr(peer, "disconnect_reason", "") or "unknown")
+        self._disconnect_reasons[reason] = self._disconnect_reasons.get(reason, 0) + 1
         self.peers.pop(peer.address, None)
         self.outbound_peers.pop(peer.address, None)
         self.inbound_peers.pop(peer.address, None)
         self.outbound_classes.pop(peer.address, None)
         self._pending_outbound_class.pop(peer.address, None)
+        self._peer_violation_counts.pop(peer.address, None)
         if self.on_peer_disconnected:
             await self.on_peer_disconnected(peer)
         logger.info(f"Peer disconnected: {peer.address}")
+
+    def _configure_peer_runtime(self, peer: Peer) -> None:
+        if not hasattr(peer, "configure_handshake"):
+            return
+        network = (
+            str(self.node_config.get("network", "mainnet"))
+            if self.node_config is not None
+            else "mainnet"
+        )
+        start_height = int(self.chainstate.get_best_height()) if self.chainstate is not None else 0
+        best_hash = str(self.chainstate.get_best_block_hash() or "") if self.chainstate is not None else ""
+        peer.configure_handshake(
+            network=network,
+            node_id=str(self._node_id or ""),
+            start_height=start_height,
+            best_block_hash=best_hash,
+            max_payload_size=int(self._max_message_size),
+            handshake_timeout_secs=int(self._handshake_timeout_secs),
+            connect_timeout_secs=int(self._connect_timeout_secs),
+            read_timeout_secs=int(self._read_timeout_secs),
+            write_timeout_secs=int(self._write_timeout_secs),
+            idle_timeout_secs=int(self._idle_timeout_secs),
+            partial_message_timeout_secs=int(self._partial_message_timeout_secs),
+            min_read_progress_bytes=int(self._min_read_progress_bytes),
+        )
+
+    async def _on_peer_protocol_violation(self, peer: Peer, reason: str) -> None:
+        address = str(peer.address)
+        if reason == "oversized_payload":
+            self.peer_scores.record_bad(address, "oversized_payload")
+        else:
+            self.peer_scores.record_bad(address, "protocol_violation")
+        score = int(self.peer_scores.get_score(address).score)
+        new_count = int(self._peer_violation_counts.get(address, 0)) + 1
+        self._peer_violation_counts[address] = new_count
+        if (
+            new_count >= int(self._peer_violation_disconnect_threshold)
+            or score <= -abs(int(self._ban_score_threshold))
+        ):
+            try:
+                await peer.disconnect()
+            except Exception:
+                pass
 
     async def accept_connection(self, reader: asyncio.StreamReader,
                                 writer: asyncio.StreamWriter) -> None:
@@ -431,10 +687,10 @@ class ConnectionManager:
             inbound_addr = ""
             if peername and len(peername) >= 2:
                 inbound_addr = f"{peername[0]}:{int(peername[1])}"
-            if not await self._evict_worst_inbound_for(inbound_addr):
-                writer.close()
-                await writer.wait_closed()
-                return
+                if not await self._evict_worst_inbound_for(inbound_addr):
+                    writer.close()
+                    await writer.wait_closed()
+                    return
         peername = writer.get_extra_info('peername')
         if not peername or len(peername) < 2:
             writer.close()
@@ -445,6 +701,7 @@ class ConnectionManager:
         if self.authority_chain_enabled:
             if not self.authority_chain.can_accept(inbound_addr, self.peers.keys()):
                 logger.warning("Rejecting inbound %s: no trusted verifier available", inbound_addr)
+                self._record_admission_rejection("no_trusted_verifier_available")
                 writer.close()
                 await writer.wait_closed()
                 return
@@ -474,10 +731,12 @@ class ConnectionManager:
             writer.close()
             return
         peer = Peer(host, port, is_outbound=False)
+        self._configure_peer_runtime(peer)
         peer.reader = reader
         peer.writer = writer
         peer.on_message = self.on_message
         peer.on_disconnect = self._on_peer_disconnect
+        peer.on_protocol_violation = self._on_peer_protocol_violation
         if not await peer._handshake():
             self.peer_scores.record_bad(peer.address, "handshake_failed")
             await peer.disconnect()
@@ -491,13 +750,362 @@ class ConnectionManager:
                 peer.address,
                 self.peers.keys(),
             )
-            if verifier is None:
+            if verifier is None and self.authority_chain.admission_mode != "strict":
                 # Fallback to local verification for admitted inbound nodes.
                 self.authority_chain.verify_from_local(peer.address)
                 verifier = "local"
-            logger.info("Authority-chain verified inbound node %s via %s", peer.address, verifier)
+            if verifier is not None:
+                logger.info("Authority-chain verified inbound node %s via %s", peer.address, verifier)
         asyncio.create_task(peer._handle_messages())
         logger.info(f"Inbound connection from {peer.address}")
+
+    async def send_join_request(self, peer: Peer) -> None:
+        """Send admission join request to a connected peer."""
+        if not self.authority_chain_enabled or not peer.connected:
+            return
+        listen_port = self.node_config.get("port", 8333) if self.node_config else 8333
+        req = JoinRequestMessage(
+            node_id=str(self._node_id or peer.address),
+            pubkey=str(self._node_pubkey_hex),
+            listen_port=int(listen_port),
+            nonce=secrets.randbits(64),
+            timestamp=int(time.time()),
+        )
+        await peer.send_join_request(req)
+
+    async def handle_join_request(self, peer: Peer, payload: bytes) -> None:
+        if not self.authority_chain_enabled:
+            return
+        request, _ = JoinRequestMessage.deserialize(payload)
+        host = str(getattr(peer, "host", "") or "")
+        if not self._allow_join_request(host):
+            self._record_admission_rejection("join_rate_limited")
+            return
+        challenge_id = secrets.randbits(64)
+        challenge = secrets.token_bytes(32)
+        expires_at = int(time.time()) + 60
+        self._admission_challenges[peer.address] = {
+            "challenge_id": challenge_id,
+            "challenge": bytes(challenge),
+            "expires_at": expires_at,
+            "created_at_ms": int(time.time() * 1000),
+            "candidate_node_id": str(request.node_id or peer.address),
+            "candidate_pubkey": str(request.pubkey or ""),
+        }
+        await peer.send_join_challenge(
+            JoinChallengeMessage(
+                challenge_id=challenge_id,
+                challenge=challenge,
+                expires_at=expires_at,
+            )
+        )
+
+    async def handle_join_challenge(self, peer: Peer, payload: bytes) -> None:
+        if not self.authority_chain_enabled:
+            return
+        challenge, _ = JoinChallengeMessage.deserialize(payload)
+        if self._node_private_key is None or not self._node_pubkey_hex:
+            return
+        message_hash = self._build_join_attestation_hash(
+            candidate_node_id=str(self._node_id),
+            candidate_pubkey_hex=self._node_pubkey_hex,
+            challenge_id=int(challenge.challenge_id),
+            challenge=bytes(challenge.challenge),
+        )
+        signature = sign_message_hash(self._node_private_key, message_hash)
+        att = JoinAttestMessage(
+            candidate_node_id=str(self._node_id),
+            verifier_node_id=str(peer.address),
+            verifier_pubkey=str(self._node_pubkey_hex),
+            challenge_id=int(challenge.challenge_id),
+            signature=signature,
+            timestamp=int(time.time()),
+        )
+        await peer.send_join_attest(att)
+
+    async def handle_join_attest(self, peer: Peer, payload: bytes) -> None:
+        if not self.authority_chain_enabled:
+            return
+        att, _ = JoinAttestMessage.deserialize(payload)
+        self._cleanup_seen_attestations()
+        pending = self._admission_challenges.get(peer.address)
+        if not pending:
+            self._record_admission_rejection("no_pending_challenge")
+            await peer.send_join_result(
+                JoinResultMessage(
+                    accepted=False,
+                    code=1,
+                    reason="no_pending_challenge",
+                    required_votes=int(self.authority_chain.min_verifier_votes),
+                    received_votes=0,
+                )
+            )
+            return
+        now = int(time.time())
+        expires_at = int(pending.get("expires_at", 0) or 0)
+        if expires_at and now > expires_at:
+            self._record_admission_rejection("challenge_expired")
+            await peer.send_join_result(
+                JoinResultMessage(
+                    accepted=False,
+                    code=9,
+                    reason="challenge_expired",
+                    required_votes=int(self.authority_chain.min_verifier_votes),
+                    received_votes=0,
+                )
+            )
+            self._admission_challenges.pop(peer.address, None)
+            return
+        if abs(now - int(att.timestamp or 0)) > int(self._attestation_max_skew_secs):
+            self._record_admission_rejection("attestation_time_skew")
+            await peer.send_join_result(
+                JoinResultMessage(
+                    accepted=False,
+                    code=10,
+                    reason="attestation_time_skew",
+                    required_votes=int(self.authority_chain.min_verifier_votes),
+                    received_votes=0,
+                )
+            )
+            return
+        if int(att.challenge_id) != int(pending.get("challenge_id", -1)):
+            self._record_admission_rejection("challenge_mismatch")
+            await peer.send_join_result(
+                JoinResultMessage(
+                    accepted=False,
+                    code=2,
+                    reason="challenge_mismatch",
+                    required_votes=int(self.authority_chain.min_verifier_votes),
+                    received_votes=0,
+                )
+            )
+            return
+        if not self._is_verifier_ready():
+            self._record_admission_rejection("verifier_not_synced")
+            await peer.send_join_result(
+                JoinResultMessage(
+                    accepted=False,
+                    code=4,
+                    reason="verifier_not_synced",
+                    required_votes=int(self.authority_chain.min_verifier_votes),
+                    received_votes=0,
+                )
+            )
+            return
+
+        candidate = str(att.candidate_node_id or pending.get("candidate_node_id") or peer.address)
+        candidate_pubkey = str(att.verifier_pubkey or pending.get("candidate_pubkey") or "").strip().lower()
+        if not candidate_pubkey:
+            self._record_admission_rejection("missing_candidate_pubkey")
+            await peer.send_join_result(
+                JoinResultMessage(
+                    accepted=False,
+                    code=5,
+                    reason="missing_candidate_pubkey",
+                    required_votes=int(self.authority_chain.min_verifier_votes),
+                    received_votes=0,
+                )
+            )
+            return
+        if not self.authority_chain.validate_rejoin_identity(candidate, candidate_pubkey):
+            self._record_admission_rejection("rejoin_identity_mismatch")
+            await peer.send_join_result(
+                JoinResultMessage(
+                    accepted=False,
+                    code=6,
+                    reason="rejoin_identity_mismatch",
+                    required_votes=int(self.authority_chain.min_verifier_votes),
+                    received_votes=0,
+                )
+            )
+            return
+        try:
+            pub = PublicKey.from_bytes(bytes.fromhex(candidate_pubkey))
+        except Exception:
+            self._record_admission_rejection("bad_candidate_pubkey")
+            await peer.send_join_result(
+                JoinResultMessage(
+                    accepted=False,
+                    code=7,
+                    reason="bad_candidate_pubkey",
+                    required_votes=int(self.authority_chain.min_verifier_votes),
+                    received_votes=0,
+                )
+            )
+            return
+        challenge_bytes = pending.get("challenge", b"")
+        if not isinstance(challenge_bytes, (bytes, bytearray)):
+            challenge_bytes = b""
+        msg_hash = self._build_join_attestation_hash(
+            candidate_node_id=candidate,
+            candidate_pubkey_hex=candidate_pubkey,
+            challenge_id=int(att.challenge_id),
+            challenge=bytes(challenge_bytes),
+        )
+        if not verify_signature(pub, msg_hash, bytes(att.signature or b"")):
+            self._record_admission_rejection("invalid_attestation_signature")
+            await peer.send_join_result(
+                JoinResultMessage(
+                    accepted=False,
+                    code=8,
+                    reason="invalid_attestation_signature",
+                    required_votes=int(self.authority_chain.min_verifier_votes),
+                    received_votes=0,
+                )
+            )
+            return
+        replay_key = f"{candidate.lower()}:{int(att.challenge_id)}"
+        if replay_key in self._seen_attest_challenges:
+            self._record_admission_rejection("attestation_replay")
+            await peer.send_join_result(
+                JoinResultMessage(
+                    accepted=False,
+                    code=11,
+                    reason="attestation_replay",
+                    required_votes=int(self.authority_chain.min_verifier_votes),
+                    received_votes=0,
+                )
+            )
+            return
+
+        verifier = str(att.verifier_node_id or peer.address)
+        verifier_identity = (
+            f"pubkey:{candidate_pubkey}" if candidate_pubkey else f"node:{verifier}"
+        )
+        self._record_verifier_activity(verifier_identity)
+        accepted = self.authority_chain.verify(
+            verifier=verifier,
+            target=candidate,
+            verifier_identity=verifier_identity,
+        )
+        if accepted:
+            self.authority_chain.register_node_identity(candidate, candidate_pubkey)
+        self._record_verify_latency(pending)
+        self._seen_attest_challenges[replay_key] = int(expires_at or (now + 300))
+        received_votes = int(self.authority_chain.get_attestation_vote_count(candidate))
+        if not accepted:
+            self._record_admission_rejection("insufficient_attestations")
+        await peer.send_join_result(
+            JoinResultMessage(
+                accepted=bool(accepted),
+                code=0 if accepted else 3,
+                reason="accepted" if accepted else "insufficient_attestations",
+                required_votes=int(self.authority_chain.min_verifier_votes),
+                received_votes=received_votes,
+            )
+        )
+        self._admission_challenges.pop(peer.address, None)
+        if not accepted and self.authority_chain.admission_mode == "strict":
+            await peer.disconnect()
+
+    def _allow_join_request(self, host: str) -> bool:
+        key = str(host or "").strip() or "unknown"
+        now = asyncio.get_event_loop().time()
+        arr = self._join_req_times_by_host.get(key, [])
+        window = float(self._join_req_window_secs)
+        arr = [ts for ts in arr if now - ts < window]
+        if len(arr) >= int(self._join_req_max_per_host):
+            self._join_req_times_by_host[key] = arr
+            return False
+        arr.append(now)
+        self._join_req_times_by_host[key] = arr
+        return True
+
+    def _cleanup_seen_attestations(self) -> None:
+        now = int(time.time())
+        stale = [k for k, exp in self._seen_attest_challenges.items() if int(exp) <= now]
+        for key in stale:
+            self._seen_attest_challenges.pop(key, None)
+
+    async def handle_join_result(self, peer: Peer, payload: bytes) -> None:
+        if not self.authority_chain_enabled:
+            return
+        result, _ = JoinResultMessage.deserialize(payload)
+        if result.accepted:
+            logger.info(
+                "Admission accepted by %s (%s/%s votes)",
+                peer.address,
+                result.received_votes,
+                result.required_votes,
+            )
+            return
+        logger.warning(
+            "Admission rejected by %s: %s (%s/%s votes)",
+            peer.address,
+            result.reason,
+            result.received_votes,
+            result.required_votes,
+        )
+        if self.authority_chain.admission_mode == "strict":
+            await peer.disconnect()
+
+    def _record_admission_rejection(self, reason: str) -> None:
+        key = str(reason or "unknown").strip() or "unknown"
+        self._admission_rejection_reasons[key] = self._admission_rejection_reasons.get(key, 0) + 1
+
+    def _record_verifier_activity(self, verifier_identity: str) -> None:
+        key = str(verifier_identity or "unknown").strip() or "unknown"
+        self._admission_verifier_activity[key] = self._admission_verifier_activity.get(key, 0) + 1
+
+    def _record_verify_latency(self, pending: Dict[str, Any]) -> None:
+        try:
+            started = int(pending.get("created_at_ms", 0) or 0)
+        except Exception:
+            started = 0
+        if started <= 0:
+            return
+        now_ms = int(time.time() * 1000)
+        latency = max(0, now_ms - started)
+        self._admission_verify_latency_sum_ms += float(latency)
+        self._admission_verify_latency_count += 1
+
+    def get_admission_metrics(self) -> Dict[str, Any]:
+        pending_challenges = 0
+        now = int(time.time())
+        for item in self._admission_challenges.values():
+            if not isinstance(item, dict):
+                continue
+            expires_at = int(item.get("expires_at", 0) or 0)
+            if expires_at == 0 or expires_at >= now:
+                pending_challenges += 1
+
+        status = self.authority_chain.get_status() if self.authority_chain_enabled else {}
+        attestation_counts = status.get("attestation_counts", {}) if isinstance(status, dict) else {}
+        verified_nodes = set(status.get("verified_nodes", [])) if isinstance(status, dict) else set()
+        pending_attestations = 0
+        if isinstance(attestation_counts, dict):
+            for node, votes in attestation_counts.items():
+                if node in verified_nodes:
+                    continue
+                try:
+                    if int(votes) > 0:
+                        pending_attestations += 1
+                except Exception:
+                    continue
+
+        avg_verify_latency_ms = 0.0
+        if self._admission_verify_latency_count > 0:
+            avg_verify_latency_ms = self._admission_verify_latency_sum_ms / float(
+                self._admission_verify_latency_count
+            )
+        verifier_top = sorted(
+            self._admission_verifier_activity.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:10]
+        return {
+            "pending_join_count": int(pending_challenges + pending_attestations),
+            "pending_challenge_count": int(pending_challenges),
+            "pending_attestation_count": int(pending_attestations),
+            "verify_latency_ms_avg": float(avg_verify_latency_ms),
+            "verify_latency_samples": int(self._admission_verify_latency_count),
+            "rejection_reasons": dict(self._admission_rejection_reasons),
+            "verifier_activity": dict(self._admission_verifier_activity),
+            "verifier_activity_top": [
+                {"verifier_id": verifier_id, "count": int(count)}
+                for verifier_id, count in verifier_top
+            ],
+            "disconnect_reasons": dict(self._disconnect_reasons),
+        }
 
     async def _evict_bad_outbound(self) -> None:
         if not self.outbound_peers:
@@ -584,7 +1192,7 @@ class ConnectionManager:
         """Validate/limit relayed addrs before adding to AddrMan."""
         added = 0
         unique: Set[str] = set()
-        max_accept = 1000
+        max_accept = min(1000, max(1, int(self._inv_max_items)))
         per_netgroup_cap = 64
         netgroup_seen: Dict[str, int] = {}
         for addr in addrs[:max_accept]:
@@ -702,6 +1310,8 @@ class ConnectionManager:
         if not host:
             return
         peer = Peer(host, int(port), is_outbound=True)
+        self._configure_peer_runtime(peer)
+        peer.on_protocol_violation = self._on_peer_protocol_violation
         ok = await peer.connect()
         if ok:
             self.addrman.mark_good(peer.address)

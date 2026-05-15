@@ -1,9 +1,10 @@
 """Blockchain reorganization logic."""
 
 from contextlib import nullcontext
-from typing import Dict, List, Tuple, Optional, ContextManager
+from typing import Dict, List, Tuple, Optional, ContextManager, Callable
 from shared.core.block import Block
 from shared.utils.logging import get_logger
+from node.utils.crash_injection import maybe_crash
 from node.storage.utxo_store import UTXOStore
 from .block_index import BlockIndex, BlockIndexEntry
 from node.validation.connect import ConnectBlock
@@ -31,6 +32,7 @@ class ReorgManager:
         new_best_block: BlockIndexEntry,
         old_best_block: BlockIndexEntry,
         get_block_func,
+        validate_connect_block: Optional[Callable[[Block, int], bool]] = None,
     ) -> Tuple[bool, List[Block], List[Block]]:
         """Perform blockchain reorganization with rollback on failure.
 
@@ -88,6 +90,7 @@ class ReorgManager:
 
             with self._transaction():
                 for entry in disconnect_entries:
+                    maybe_crash("during_reorg_disconnect")
                     block = get_block_func(entry.block_hash)
                     if not block:
                         raise RuntimeError(f"Failed to get block {entry.block_hash}")
@@ -97,9 +100,12 @@ class ReorgManager:
                     self.block_index.mark_main_chain(entry.block_hash, False)
 
                 for entry in connect_entries:
+                    maybe_crash("during_reorg_connect")
                     block = get_block_func(entry.block_hash)
                     if not block:
                         raise RuntimeError(f"Failed to get block {entry.block_hash}")
+                    if validate_connect_block is not None and not validate_connect_block(block, int(entry.height)):
+                        raise RuntimeError(f"Stateful validation failed for reorg block {entry.height}")
                     if not self.connect_block.connect(block):
                         raise RuntimeError(f"Failed to connect block {entry.height}")
                     connected.append(block)
@@ -130,6 +136,7 @@ class ReorgManager:
         new_best_block: BlockIndexEntry,
         old_best_block: BlockIndexEntry,
         get_block_func,
+        validate_connect_block: Optional[Callable[[Block, int], bool]] = None,
     ) -> bool:
         """Preflight reorg by simulating disconnect/connect without committing state."""
         fork_point = self._find_common_ancestor(new_best_block, old_best_block)
@@ -173,6 +180,8 @@ class ReorgManager:
                     self.block_index.mark_main_chain(entry.block_hash, False)
                 for entry in connect_entries:
                     block = get_block_func(entry.block_hash)
+                    if validate_connect_block is not None and (not block or not validate_connect_block(block, int(entry.height))):
+                        return False
                     if not block or not self.connect_block.connect(block):
                         return False
                     self.block_index.mark_main_chain(entry.block_hash, True)
@@ -193,6 +202,8 @@ class ReorgManager:
 
             for entry in connect_entries:
                 block = get_block_func(entry.block_hash)
+                if validate_connect_block is not None and (not block or not validate_connect_block(block, int(entry.height))):
+                    return False
                 if not block or not self.connect_block.connect(block):
                     return False
                 self.block_index.mark_main_chain(entry.block_hash, True)

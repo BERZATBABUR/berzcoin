@@ -4,6 +4,12 @@ import struct
 from typing import Tuple, Any, Dict
 from shared.core.serialization import Serializer
 from shared.core.hashes import hash256
+from shared.protocol.messages import (
+    JoinAttestMessage,
+    JoinChallengeMessage,
+    JoinRequestMessage,
+    JoinResultMessage,
+)
 
 class MessageHeader:
     """P2P message header."""
@@ -208,3 +214,31 @@ class MessageCodec:
             result['relay'] = True
 
         return result
+
+    def encode_join_request(self, msg: JoinRequestMessage) -> bytes:
+        return msg.serialize()
+
+    def decode_join_request(self, data: bytes) -> JoinRequestMessage:
+        msg, _ = JoinRequestMessage.deserialize(data)
+        return msg
+
+    def encode_join_challenge(self, msg: JoinChallengeMessage) -> bytes:
+        return msg.serialize()
+
+    def decode_join_challenge(self, data: bytes) -> JoinChallengeMessage:
+        msg, _ = JoinChallengeMessage.deserialize(data)
+        return msg
+
+    def encode_join_attest(self, msg: JoinAttestMessage) -> bytes:
+        return msg.serialize()
+
+    def decode_join_attest(self, data: bytes) -> JoinAttestMessage:
+        msg, _ = JoinAttestMessage.deserialize(data)
+        return msg
+
+    def encode_join_result(self, msg: JoinResultMessage) -> bytes:
+        return msg.serialize()
+
+    def decode_join_result(self, data: bytes) -> JoinResultMessage:
+        msg, _ = JoinResultMessage.deserialize(data)
+        return msg

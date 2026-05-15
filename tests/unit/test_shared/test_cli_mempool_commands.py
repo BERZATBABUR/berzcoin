@@ -1,9 +1,11 @@
 """Unit tests for CLI mempool command wrappers."""
 
 import asyncio
+import io
 import os
 import sys
 import unittest
+from contextlib import redirect_stderr
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 
@@ -51,7 +53,22 @@ class TestCLIMempoolCommands(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_cli_rejects_malformed_sendrawtransaction_hex(self) -> None:
+        cli = BerzCoinCLI()
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = asyncio.run(cli.run(["sendrawtransaction", "zz11"]))
+        self.assertEqual(rc, 2)
+        self.assertIn("malformed transaction hex", err.getvalue().lower())
+
+    def test_cli_rejects_invalid_generate_block_count(self) -> None:
+        cli = BerzCoinCLI()
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = asyncio.run(cli.run(["generate", "0"]))
+        self.assertEqual(rc, 2)
+        self.assertIn("numblocks must be > 0", err.getvalue().lower())
+
 
 if __name__ == "__main__":
     unittest.main()
-

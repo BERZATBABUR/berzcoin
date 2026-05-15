@@ -11,6 +11,7 @@ from .buried_deployments import (
     is_consensus_feature_active,
 )
 from .params import ConsensusParams
+from .pow import ProofOfWork
 
 class ConsensusRules:
     """Consensus validation rules."""
@@ -21,6 +22,7 @@ class ConsensusRules:
         output_value_lookup: Optional[Callable[[str, int], Optional[int]]] = None,
     ):
         self.params = params
+        self.pow = ProofOfWork(params)
         # Optional callback: resolve (txid, vout) -> output value.
         # When set, subsidy validation can account for transaction fees.
         self.output_value_lookup = output_value_lookup
@@ -36,7 +38,13 @@ class ConsensusRules:
             raise ValueError(f"Invalid timestamp: {header.timestamp}")
         if prev_header:
             pass
-        target = self.get_target(header.bits)
+        require_canonical = bool(getattr(self.params, "pow_require_canonical_bits", False))
+        target, ok, _reason = self.pow.decode_compact(
+            int(header.bits),
+            require_canonical=require_canonical,
+        )
+        if not ok:
+            raise ValueError(f"Invalid compact difficulty bits: 0x{int(header.bits):08x}")
         if not header.is_valid_pow(target):
             raise ValueError(f"Proof of work failed: hash {header.hash_hex()}")
         return True
@@ -196,24 +204,7 @@ class ConsensusRules:
         return total_fees
 
     def get_target(self, bits: int) -> int:
-        exponent = bits >> 24
-        coefficient = bits & 0x007fffff
-        if exponent <= 3:
-            target = coefficient >> (8 * (3 - exponent))
-        else:
-            target = coefficient << (8 * (exponent - 3))
-        if target < 0 or target > self.params.pow_limit:
-            target = self.params.pow_limit
-        return target
+        return self.pow.get_target(bits)
 
     def get_bits(self, target: int) -> int:
-        target_bytes = target.to_bytes(32, 'big')
-        for i, byte in enumerate(target_bytes):
-            if byte != 0:
-                break
-        exponent = 32 - i
-        coefficient = int.from_bytes(target_bytes[i:i+3], 'big')
-        if coefficient >= 0x800000:
-            coefficient >>= 8
-            exponent += 1
-        return (exponent << 24) | coefficient
+        return self.pow.get_bits(target)

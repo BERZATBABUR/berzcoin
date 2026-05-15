@@ -12,6 +12,9 @@ class _DBStub:
     def fetch_all(self, _query, _params=()):
         return list(self._rows)
 
+    def execute(self, _query, _params=()):
+        return None
+
 
 class _HeaderStub:
     def __init__(self, block_hash: str, prev_hash: str):

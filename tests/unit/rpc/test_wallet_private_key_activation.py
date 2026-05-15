@@ -54,8 +54,9 @@ class TestWalletPrivateKeyActivation(unittest.TestCase):
                 handlers = WalletHandlers(node)
 
                 created = await handlers.create_wallet()
-                self.assertIn("private_key", created)
-                private_key = created["private_key"]
+                self.assertNotIn("private_key", created)
+                private_key = str(node.simple_wallet_manager.active_private_key or "")
+                self.assertTrue(private_key)
                 wallet_file = Path(tmp) / "wallets" / f"{created['address']}.json"
                 on_disk = json.loads(wallet_file.read_text(encoding="utf-8"))
                 self.assertEqual(on_disk.get("format"), "berzcoin.wallet.encrypted.v1")

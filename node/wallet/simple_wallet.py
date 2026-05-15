@@ -247,6 +247,7 @@ class SimpleWalletManager:
         data_dir: Path,
         network: str = "mainnet",
         wallet_passphrase: Optional[str] = None,
+        allow_insecure_fallback: bool = False,
         default_unlock_timeout_secs: int = 300,
     ):
         """Initialize wallet manager."""
@@ -258,6 +259,7 @@ class SimpleWalletManager:
         self.active_private_key: Optional[str] = None
         self.default_unlock_timeout_secs = max(1, int(default_unlock_timeout_secs or 300))
         self._unlocked_until: float = 0.0
+        self._allow_insecure_fallback = bool(allow_insecure_fallback)
         self._wallet_passphrase = self._resolve_wallet_passphrase(wallet_passphrase)
 
     def create_wallet(self) -> SimpleWallet:
@@ -402,21 +404,58 @@ class SimpleWalletManager:
         self._unlock_for(int(timeout_secs), wallet.private_key_hex)
         return True
 
-    def get_balance(self, chainstate) -> int:
-        """Get balance for active wallet from chain."""
+    def get_balance_breakdown(self, chainstate) -> Dict[str, int]:
+        """Return wallet balance buckets in satoshis.
+
+        Keys:
+        - total: all tracked-chain UTXOs
+        - spendable: mature, confirmed UTXOs
+        - immature_coinbase: coinbase outputs below maturity
+        - unconfirmed: outputs with <= 0 confirmations
+        """
+        zero = {
+            "total": 0,
+            "spendable": 0,
+            "immature_coinbase": 0,
+            "unconfirmed": 0,
+        }
         if not self.active_wallet:
-            return 0
+            return zero
 
         tracked = list(self.active_wallet.tracked_addresses or [])
         if self.active_wallet.address and self.active_wallet.address not in tracked:
             tracked.append(self.active_wallet.address)
         if not tracked:
             tracked = [self.active_wallet.address]
-        total = 0
+
+        get_best_height = getattr(chainstate, "get_best_height", None)
+        best_height = int(get_best_height()) if callable(get_best_height) else 0
+        params = getattr(chainstate, "params", None)
+        maturity = int(getattr(params, "coinbase_maturity", 100))
+
+        totals = dict(zero)
         for addr in tracked:
             utxos = chainstate.get_utxos_for_address(addr, 1000)
-            total += sum(int(u.get("value", 0)) for u in utxos)
-        return total
+            for u in utxos:
+                value = int(u.get("value", 0))
+                totals["total"] += value
+
+                utxo_height = int(u.get("height", 0) or 0)
+                confirmations = (best_height - utxo_height + 1) if utxo_height > 0 else 0
+                if confirmations <= 0:
+                    totals["unconfirmed"] += value
+                    continue
+
+                if bool(u.get("is_coinbase", False)) and confirmations < maturity:
+                    totals["immature_coinbase"] += value
+                    continue
+
+                totals["spendable"] += value
+        return totals
+
+    def get_balance(self, chainstate) -> int:
+        """Get total wallet balance in satoshis."""
+        return int(self.get_balance_breakdown(chainstate).get("total", 0))
 
     def _save_wallet(self, wallet: SimpleWallet) -> None:
         """Save wallet to disk."""
@@ -466,10 +505,21 @@ class SimpleWalletManager:
         env_value = str(os.getenv("BERZCOIN_WALLET_PASSPHRASE", "")).strip()
         if env_value:
             return env_value
+        allow_fallback_env = str(os.getenv("BERZCOIN_ALLOW_INSECURE_WALLET_FALLBACK", "")).strip().lower()
+        allow_fallback = self._allow_insecure_fallback or allow_fallback_env in {"1", "true", "yes"}
+        network = str(self.network or "mainnet").strip().lower()
+        if network in {"regtest", "testnet"} and allow_fallback:
+            logger.warning(
+                "Using insecure fallback wallet encryption passphrase in %s due to explicit override",
+                network,
+            )
+            return _INSECURE_FALLBACK_PASSPHRASE
         logger.warning(
-            "Using insecure fallback wallet encryption passphrase; set wallet_encryption_passphrase"
+            "Refusing insecure wallet fallback passphrase on %s; set wallet_encryption_passphrase "
+            "or BERZCOIN_WALLET_PASSPHRASE (or enable BERZCOIN_ALLOW_INSECURE_WALLET_FALLBACK=1 on regtest/testnet)",
+            network,
         )
-        return _INSECURE_FALLBACK_PASSPHRASE
+        raise ValueError("wallet encryption passphrase is required")
 
     def _encrypt_wallet_record(self, record: Dict[str, Any], passphrase: str) -> Dict[str, Any]:
         salt = secrets.token_bytes(16)

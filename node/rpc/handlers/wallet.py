@@ -35,6 +35,7 @@ class WalletHandlers:
                 self.node.config.get_datadir(),
                 network=self.node.config.get("network", "mainnet"),
                 wallet_passphrase=self.node.config.get("wallet_encryption_passphrase", ""),
+                allow_insecure_fallback=bool(self.node.config.get("wallet_allow_insecure_fallback", False)),
                 default_unlock_timeout_secs=int(
                     self.node.config.get("wallet_default_unlock_timeout", 300)
                 ),
@@ -165,7 +166,8 @@ class WalletHandlers:
         if not wallet:
             return {"active": False}
 
-        balance_sats = int(self.node.chainstate.get_balance(wallet.address))
+        breakdown = self._manager().get_balance_breakdown(self.node.chainstate)
+        balance_sats = int(breakdown.get("total", 0))
         info = {
             "active": True,
             "walletname": "simple",
@@ -174,6 +176,10 @@ class WalletHandlers:
             "address": wallet.address,
             "balance": balance_sats / 100000000,
             "satoshis": balance_sats,
+            "balance_total_sats": balance_sats,
+            "balance_spendable_sats": int(breakdown.get("spendable", 0)),
+            "balance_immature_coinbase_sats": int(breakdown.get("immature_coinbase", 0)),
+            "balance_unconfirmed_sats": int(breakdown.get("unconfirmed", 0)),
             "private_keys_enabled": not bool(getattr(wallet, "watch_only", False)),
             "unlocked_until": int(getattr(self._manager(), "_unlocked_until", 0)),
             "unlocked": bool(self._manager().is_wallet_unlocked()),
@@ -194,7 +200,8 @@ class WalletHandlers:
         wallet = self._active_wallet()
         if not wallet:
             return 0.0
-        balance_sats = int(self.node.chainstate.get_balance(wallet.address))
+        breakdown = self._manager().get_balance_breakdown(self.node.chainstate)
+        balance_sats = int(breakdown.get("total", 0))
         return balance_sats / 100000000
 
     async def get_new_address(
@@ -403,11 +410,9 @@ class WalletHandlers:
         self._manager().active_private_key = wallet.private_key_hex
         return {
             "name": "simple",
-            "private_key": wallet.private_key_hex,
             "public_key": wallet.public_key_hex,
             "address": wallet.address,
-            "mnemonic": wallet.mnemonic,
-            "warning": "Store your private key safely.",
+            "warning": "Wallet created and activated.",
         }
 
     async def load_wallet(self, private_key: str) -> Dict[str, Any]:

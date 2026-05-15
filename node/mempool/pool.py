@@ -517,6 +517,14 @@ class Mempool:
                 logger.debug("Negative output value")
                 self.last_reject_reason = "negative_output"
                 return False
+            if int(txout.value) == 0:
+                logger.debug("Zero output value")
+                self.last_reject_reason = "zero_output"
+                return False
+            if not txout.script_pubkey:
+                logger.debug("Empty output script")
+                self.last_reject_reason = "empty_output_script"
+                return False
             total_out += int(txout.value)
             if total_out > max_money:
                 logger.debug("Total output exceeds max money")

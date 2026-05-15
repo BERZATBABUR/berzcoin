@@ -15,6 +15,12 @@ logger = get_logger()
 class Peer:
     """Peer connection handler."""
     MAX_PAYLOAD_SIZE = 2_000_000
+    VALID_COMMANDS = {
+        "version", "verack", "ping", "pong", "inv", "getdata", "getheaders", "headers",
+        "getblocks", "block", "tx", "addr", "getaddr", "sendcmpct", "cmpctblock",
+        "getblocktxn", "blocktxn", "join_request", "join_challenge", "join_attest",
+        "join_result",
+    }
 
     def __init__(self, host: str, port: int, is_outbound: bool = True):
         self.host = host
@@ -36,6 +42,62 @@ class Peer:
         self.compact_successes: int = 0
         self.compact_failures: int = 0
         self.last_message_at: float = 0.0
+        self.on_protocol_violation: Optional[Callable[[Any, str], Any]] = None
+        self.connect_timeout_secs: int = 10
+        self.handshake_timeout_secs: int = 30
+        self.read_timeout_secs: int = 30
+        self.write_timeout_secs: int = 15
+        self.idle_timeout_secs: int = 180
+        self.partial_message_timeout_secs: int = 10
+        self.min_read_progress_bytes: int = 1
+        self.disconnect_reason: str = ""
+
+    def configure_handshake(
+        self,
+        *,
+        network: str,
+        node_id: str = "",
+        start_height: int = 0,
+        best_block_hash: str = "",
+        user_agent: str = "/BerzCoin:1.0/",
+        services: int = 1,
+        relay: bool = True,
+        max_payload_size: Optional[int] = None,
+        handshake_timeout_secs: Optional[int] = None,
+        connect_timeout_secs: Optional[int] = None,
+        read_timeout_secs: Optional[int] = None,
+        write_timeout_secs: Optional[int] = None,
+        idle_timeout_secs: Optional[int] = None,
+        partial_message_timeout_secs: Optional[int] = None,
+        min_read_progress_bytes: Optional[int] = None,
+    ) -> None:
+        """Bind codec+handshake fields to the node's active network/runtime identity."""
+        self.codec = MessageCodec(str(network))
+        self.handshake = VersionHandshake(
+            local_services=int(services),
+            user_agent=str(user_agent),
+            start_height=int(start_height),
+            relay=bool(relay),
+            expected_network=str(network),
+            node_id=str(node_id or ""),
+            best_block_hash=str(best_block_hash or ""),
+        )
+        if max_payload_size is not None:
+            self.MAX_PAYLOAD_SIZE = max(1024, int(max_payload_size))
+        if handshake_timeout_secs is not None:
+            self.handshake_timeout_secs = max(1, int(handshake_timeout_secs))
+        if connect_timeout_secs is not None:
+            self.connect_timeout_secs = max(1, int(connect_timeout_secs))
+        if read_timeout_secs is not None:
+            self.read_timeout_secs = max(1, int(read_timeout_secs))
+        if write_timeout_secs is not None:
+            self.write_timeout_secs = max(1, int(write_timeout_secs))
+        if idle_timeout_secs is not None:
+            self.idle_timeout_secs = max(1, int(idle_timeout_secs))
+        if partial_message_timeout_secs is not None:
+            self.partial_message_timeout_secs = max(1, int(partial_message_timeout_secs))
+        if min_read_progress_bytes is not None:
+            self.min_read_progress_bytes = max(1, int(min_read_progress_bytes))
 
     async def connect(self) -> bool:
         if self.connecting or self.connected:
@@ -44,10 +106,10 @@ class Peer:
         try:
             self.reader, self.writer = await asyncio.wait_for(
                 asyncio.open_connection(self.host, self.port),
-                timeout=10,
+                timeout=float(self.connect_timeout_secs),
             )
             if not await self._handshake():
-                await self.disconnect()
+                await self.disconnect(reason="handshake_failed")
                 return False
             self.connected = True
             self.connected_at = asyncio.get_event_loop().time()
@@ -64,7 +126,7 @@ class Peer:
     async def _handshake(self) -> bool:
         version_msg = self.handshake.create_version()
         await self.send_message("version", version_msg.serialize())
-        version_response = await self._wait_for_message("version", timeout=30)
+        version_response = await self._wait_for_message("version", timeout=self.handshake_timeout_secs)
         if version_response is None:
             logger.error(f"Timeout waiting for version from {self.host}")
             return False
@@ -76,7 +138,7 @@ class Peer:
         self.relay_txs = bool(getattr(remote_version, "relay", True))
         verack_msg = self.handshake.create_verack()
         await self.send_message("verack", verack_msg.serialize())
-        verack_response = await self._wait_for_message("verack", timeout=30)
+        verack_response = await self._wait_for_message("verack", timeout=self.handshake_timeout_secs)
         if verack_response is None:
             logger.error(f"Timeout waiting for verack from {self.host}")
             return False
@@ -94,13 +156,25 @@ class Peer:
                 payload_len = int.from_bytes(header_data[16:20], 'little')
                 if payload_len > self.MAX_PAYLOAD_SIZE:
                     logger.warning("Rejecting oversized payload from %s", self.host)
+                    await self._report_protocol_violation("oversized_payload")
                     return None
-                cmd = header_data[4:16].split(b"\x00", 1)[0].decode("ascii", errors="ignore")
+                payload = await self._read_exactly_with_progress(
+                    payload_len,
+                    timeout=max(1, int(timeout)),
+                ) if payload_len else b""
+                if payload is None:
+                    await self._report_protocol_violation("partial_message_timeout")
+                    return None
+                try:
+                    cmd, decoded_payload, _ = self.codec.decode(header_data + payload)
+                except Exception:
+                    await self._report_protocol_violation("malformed_message")
+                    return None
+                if cmd not in self.VALID_COMMANDS:
+                    await self._report_protocol_violation("invalid_command")
+                    return None
                 if cmd == command:
-                    payload = await self.reader.readexactly(payload_len)
-                    return payload
-                if payload_len:
-                    await self.reader.readexactly(payload_len)
+                    return decoded_payload
         except asyncio.TimeoutError:
             return None
         except asyncio.IncompleteReadError:
@@ -112,20 +186,41 @@ class Peer:
     async def _handle_messages(self) -> None:
         try:
             while self.connected:
-                header = await self.reader.readexactly(24)
-                command = header[4:16].split(b"\x00", 1)[0].decode("ascii", errors="ignore")
+                idle_budget = max(1, int(self.idle_timeout_secs))
+                header = await asyncio.wait_for(
+                    self.reader.readexactly(24),
+                    timeout=float(idle_budget),
+                )
                 payload_len = int.from_bytes(header[16:20], 'little')
                 if payload_len > self.MAX_PAYLOAD_SIZE:
                     logger.warning("Peer %s sent oversized payload (%s)", self.host, payload_len)
+                    await self._report_protocol_violation("oversized_payload")
                     break
-                payload = await self.reader.readexactly(payload_len) if payload_len else b""
+                payload = await self._read_exactly_with_progress(
+                    payload_len,
+                    timeout=max(1, int(self.read_timeout_secs)),
+                ) if payload_len else b""
+                if payload is None:
+                    await self._report_protocol_violation("partial_message_timeout")
+                    break
+                try:
+                    command, decoded_payload, _ = self.codec.decode(header + payload)
+                except Exception:
+                    await self._report_protocol_violation("malformed_message")
+                    break
+                if command not in self.VALID_COMMANDS:
+                    await self._report_protocol_violation("invalid_command")
+                    break
                 self.last_message_at = asyncio.get_event_loop().time()
                 if self.on_message:
-                    await self.on_message(self, command, payload)
+                    await self.on_message(self, command, decoded_payload)
+        except asyncio.TimeoutError:
+            self.disconnect_reason = self.disconnect_reason or "idle_timeout"
         except asyncio.IncompleteReadError:
-            pass
+            self.disconnect_reason = self.disconnect_reason or "incomplete_read"
         except Exception as e:
             logger.error(f"Error handling messages from {self.host}: {e}")
+            self.disconnect_reason = self.disconnect_reason or "read_error"
         finally:
             await self.disconnect()
 
@@ -137,10 +232,16 @@ class Peer:
         try:
             encoded = self.codec.encode(command, payload)
             self.writer.write(encoded)
-            await self.writer.drain()
+            await asyncio.wait_for(
+                self.writer.drain(),
+                timeout=float(max(1, int(self.write_timeout_secs))),
+            )
+        except asyncio.TimeoutError:
+            self.disconnect_reason = self.disconnect_reason or "write_timeout"
+            await self.disconnect(reason="write_timeout")
         except Exception as e:
             logger.error(f"Failed to send message to {self.host}: {e}")
-            await self.disconnect()
+            await self.disconnect(reason="send_error")
 
     async def send_version(self) -> None:
         version_msg = self.handshake.create_version()
@@ -182,6 +283,18 @@ class Peer:
         msg = BlockTxnMessage(block_hash=block_hash, transactions=list(transactions))
         await self.send_message("blocktxn", msg.serialize())
 
+    async def send_join_request(self, message: JoinRequestMessage) -> None:
+        await self.send_message("join_request", message.serialize())
+
+    async def send_join_challenge(self, message: JoinChallengeMessage) -> None:
+        await self.send_message("join_challenge", message.serialize())
+
+    async def send_join_attest(self, message: JoinAttestMessage) -> None:
+        await self.send_message("join_attest", message.serialize())
+
+    async def send_join_result(self, message: JoinResultMessage) -> None:
+        await self.send_message("join_result", message.serialize())
+
     def record_compact_result(self, success: bool) -> None:
         if success:
             self.compact_successes += 1
@@ -193,9 +306,11 @@ class Peer:
         if self.compact_failures >= 3 and self.compact_failures > (self.compact_successes * 2):
             self.prefers_compact_blocks = False
 
-    async def disconnect(self) -> None:
+    async def disconnect(self, reason: str = "") -> None:
         was_connected = self.connected
         self.connected = False
+        if reason:
+            self.disconnect_reason = str(reason)
         if self.writer:
             self.writer.close()
             await self.writer.wait_closed()
@@ -203,6 +318,48 @@ class Peer:
             await self.on_disconnect(self)
         if was_connected:
             logger.info(f"Disconnected from {self.host}:{self.port}")
+
+    async def _report_protocol_violation(self, reason: str) -> None:
+        self.disconnect_reason = self.disconnect_reason or str(reason)
+        try:
+            if self.on_protocol_violation:
+                res = self.on_protocol_violation(self, str(reason))
+                if asyncio.iscoroutine(res):
+                    await res
+        except Exception:
+            pass
+
+    async def _read_exactly_with_progress(self, total: int, timeout: int) -> Optional[bytes]:
+        if total <= 0:
+            return b""
+        buf = bytearray()
+        while len(buf) < total:
+            chunk_budget = min(65536, total - len(buf))
+            try:
+                chunk = await asyncio.wait_for(
+                    self.reader.read(chunk_budget),
+                    timeout=float(max(1, int(timeout))),
+                )
+            except asyncio.TimeoutError:
+                return None
+            if not chunk:
+                return None
+            if len(chunk) < int(self.min_read_progress_bytes):
+                wait_deadline = time.monotonic() + float(max(1, int(self.partial_message_timeout_secs)))
+                while len(chunk) < int(self.min_read_progress_bytes):
+                    if time.monotonic() >= wait_deadline:
+                        return None
+                    rest = await asyncio.wait_for(
+                        self.reader.read(chunk_budget),
+                        timeout=1.0,
+                    )
+                    if not rest:
+                        return None
+                    chunk += rest
+                    if len(chunk) >= chunk_budget:
+                        break
+            buf.extend(chunk)
+        return bytes(buf)
 
     @property
     def address(self) -> str:

@@ -49,7 +49,7 @@ class TransactionBuilder:
         total_out = 0
         for address, amount in outputs:
             if amount <= 0:
-                continue
+                raise ValueError("Output amount must be positive")
             
             script_pubkey = self._create_script_pubkey(address)
             txout = TxOut(value=amount, script_pubkey=script_pubkey)

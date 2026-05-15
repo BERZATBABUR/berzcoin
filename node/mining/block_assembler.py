@@ -111,34 +111,10 @@ class BlockAssembler:
             return []
         available_weight = max(0, int(self.max_weight) - int(self.reserved_weight))
         get_for_block = getattr(self.mempool, "get_transactions_for_block", None)
-        if callable(get_for_block):
-            return await get_for_block(max_weight=available_weight)
-
-        # Backward-compat fallback for older mempool adapters in tests.
-        get_all = getattr(self.mempool, "get_transactions", None)
-        if not callable(get_all):
+        if not callable(get_for_block):
+            logger.warning("Mempool selector missing get_transactions_for_block; template tx list empty")
             return []
-        all_txs = await get_all()
-
-        txs_with_fees: List[tuple] = []
-        for tx in all_txs:
-            fee = self._mempool_fee(tx) or self._get_transaction_fee(tx)
-            raw = tx.serialize()
-            size = len(raw)
-            if size > 0:
-                txs_with_fees.append((tx, fee / size))
-
-        txs_with_fees.sort(key=lambda x: x[1], reverse=True)
-
-        selected: List[Transaction] = []
-        current_weight = self.reserved_weight
-        for tx, _ in txs_with_fees:
-            tx_weight = calculate_transaction_weight(tx)
-            if current_weight + tx_weight <= self.max_weight:
-                if await self._ancestors_included(tx, selected):
-                    selected.append(tx)
-                    current_weight += tx_weight
-        return selected
+        return await get_for_block(max_weight=available_weight)
 
     def _mempool_fee(self, tx: Transaction) -> Optional[int]:
         tid = tx.txid().hex()

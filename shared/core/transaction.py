@@ -233,6 +233,15 @@ class Transaction:
             Transaction ID (32 bytes)
         """
         return hash256(self.serialize(include_witness=False))
+
+    def txid_hex(self, display_order: bool = True) -> str:
+        """Transaction ID hex helper.
+
+        - Internal byte order: ``txid().hex()``.
+        - RPC/display order (Bitcoin-style): reversed bytes.
+        """
+        txid = self.txid()
+        return txid[::-1].hex() if display_order else txid.hex()
     
     def wtxid(self) -> bytes:
         """Calculate witness transaction ID (double SHA256 of serialized transaction with witness).
@@ -241,6 +250,15 @@ class Transaction:
             Witness transaction ID (32 bytes)
         """
         return hash256(self.serialize(include_witness=True))
+
+    def wtxid_hex(self, display_order: bool = True) -> str:
+        """Witness TXID hex helper.
+
+        - Internal byte order: ``wtxid().hex()``.
+        - RPC/display order (Bitcoin-style): reversed bytes.
+        """
+        wtxid = self.wtxid()
+        return wtxid[::-1].hex() if display_order else wtxid.hex()
     
     def is_coinbase(self) -> bool:
         """Check if transaction is coinbase."""
@@ -267,3 +285,13 @@ class Transaction:
         """String representation."""
         txid = self.txid().hex()[:16]
         return f"Transaction(txid={txid}..., ins={len(self.vin)}, outs={len(self.vout)})"
+
+
+def deserialize_transaction_strict(data: bytes) -> Transaction:
+    """Deserialize a transaction and reject trailing garbage bytes."""
+    tx, offset = Transaction.deserialize(data, 0)
+    if offset != len(data):
+        raise ValueError(
+            f"Extra bytes after transaction: consumed={offset} total={len(data)}"
+        )
+    return tx

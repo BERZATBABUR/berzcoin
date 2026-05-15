@@ -18,6 +18,9 @@ class _Chain:
     def get_best_height(self):
         return 123
 
+    def get_best_block_hash(self):
+        return None
+
 
 class _Conn:
     def get_connected_count(self):

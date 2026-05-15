@@ -39,3 +39,14 @@ testpaths = ["tests"]
 pythonpath = ["."]
 python_files = ["test_*.py", "*_test.py", "send_receive.py"]
 asyncio_default_fixture_loop_scope = "function"
+addopts = "--strict-markers --cov=node --cov=shared --cov-report=term-missing --cov-report=xml --cov-fail-under=55"
+markers = [
+    "unit: fast deterministic unit tests",
+    "integration: multi-component integration tests",
+    "e2e: end-to-end scenario tests",
+    "fuzz: adversarial fuzz tests",
+    "chaos: long-running chaos/fault tests",
+    "slow: long-running or timing-sensitive tests",
+    "regression: regression test for a previously fixed bug",
+    "allow_sleep: explicitly allow real blocking sleep usage",
+]

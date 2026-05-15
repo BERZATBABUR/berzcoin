@@ -23,14 +23,14 @@ class HeaderChain:
         self.db.execute("""
             INSERT OR REPLACE INTO block_headers
             (hash, height, version, prev_block_hash, merkle_root,
-             timestamp, bits, nonce, chainwork, is_valid)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             timestamp, bits, nonce, chainwork, is_valid, status_flags)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             block_hash, height, header.version,
             header.prev_block_hash.hex(),
             header.merkle_root.hex(),
             header.timestamp, header.bits, header.nonce,
-            str(chainwork), True
+            str(chainwork), True, (1 << 0) | (1 << 2)
         ))
         self._header_cache[height] = header
         self._height_cache[block_hash] = height

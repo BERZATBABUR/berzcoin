@@ -85,11 +85,18 @@ class UTXOStore:
             logger.warning(f"Pruned {pruned} invalid future coinbase UTXOs")
         return pruned
 
-    def get_utxos_for_spending(self, address: str, target_value: int, min_conf: int = 1) -> List[Dict[str, Any]]:
+    def get_utxos_for_spending(
+        self,
+        address: str,
+        target_value: int,
+        min_conf: int = 1,
+        coinbase_maturity: int = 100,
+    ) -> List[Dict[str, Any]]:
         if target_value <= 0:
             return []
 
         min_conf = max(0, int(min_conf))
+        coinbase_maturity = max(0, int(coinbase_maturity))
         tip_row = self.db.fetch_one("SELECT MAX(height) AS best_height FROM blocks WHERE is_valid = 1")
         best_height = int(tip_row["best_height"]) if tip_row and tip_row["best_height"] is not None else -1
 
@@ -106,6 +113,8 @@ class UTXOStore:
         total = 0
         for row in utxos:
             confirmations = (best_height - int(row["height"]) + 1) if best_height >= int(row["height"]) else 0
+            if bool(row.get("is_coinbase", False)) and confirmations < coinbase_maturity:
+                continue
             if confirmations < min_conf:
                 continue
             selected.append(row)

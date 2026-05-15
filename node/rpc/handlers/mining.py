@@ -11,6 +11,7 @@ from shared.consensus.pow import ProofOfWork
 from shared.consensus.weights import calculate_transaction_weight
 from shared.protocol.messages import InvMessage
 from shared.utils.logging import get_logger
+from node.rpc.errors import RPCError
 
 logger = get_logger()
 
@@ -27,7 +28,7 @@ class MiningHandlers:
         best_header = chain.get_header(best_height) if best_height >= 0 else None
 
         if not best_header:
-            return {'error': 'No blocks yet'}
+            raise RPCError(-32000, "No blocks yet")
 
         return {
             'blocks': best_height,
@@ -48,14 +49,14 @@ class MiningHandlers:
         mempool = self.node.mempool
 
         if not chain or not mempool:
-            return {'error': 'Chain or mempool not ready'}
+            raise RPCError(-32000, "Chain or mempool not ready")
 
         best_height = chain.get_best_height()
         best_hash = chain.get_best_block_hash()
         best_header = chain.get_header(best_height) if best_height >= 0 else None
 
         if not best_hash or not best_header:
-            return {'error': 'No chain tip'}
+            raise RPCError(-32000, "No chain tip")
 
         height = best_height + 1
 
@@ -130,39 +131,14 @@ class MiningHandlers:
         block, _ = Block.deserialize(block_bytes)
         block_hash = block.header.hash_hex()
 
-        if hasattr(self.node, "on_block"):
-            accepted, _bh, reason = await self.node.on_block(
-                block, source_peer=None, relay=False
-            )
-            if accepted or reason == "known":
-                return block_hash
-            raise ValueError(f"Block rejected: {reason}")
-
-        chain = self.node.chainstate
-        height = chain.get_best_height() + 1
-        if not chain.validate_block_stateful(block, height):
-            raise ValueError(f"Invalid block at height {height}")
-        if chain.block_index.get_block(block_hash):
-            return block_hash
-
-        block_work = chain.chainwork.calculate_chain_work([block.header])
-        chainwork_total = chain.get_best_chainwork() + block_work
-
-        chain.blocks_store.write_block(block, height)
-        chain.block_index.add_block(block, height, chainwork_total)
-
-        connect = ConnectBlock(
-            chain.utxo_store,
-            chain.block_index,
-            network=chain.params.get_network_name(),
+        if not hasattr(self.node, "on_block"):
+            raise RPCError(-32000, "Node block accept path unavailable")
+        accepted, _bh, reason = await self.node.on_block(
+            block, source_peer=None, relay=False
         )
-        if not connect.connect(block):
-            raise ValueError("Block connect failed")
-
-        chain.set_best_block(block_hash, height, chainwork_total)
-        chain.header_chain.add_header(block.header, height, chainwork_total)
-        logger.info("submit_block: connected block %d %s", height, block_hash[:16])
-        return block_hash
+        if accepted or reason == "known":
+            return block_hash
+        raise RPCError(-32000, f"Block rejected: {reason}")
 
     async def get_network_hashps(self, blocks: int = 120, height: int = -1) -> float:
         _ = blocks, height
@@ -187,8 +163,6 @@ class MiningHandlers:
         if not self.node.miner:
             raise ValueError("Miner not initialized")
 
-        from node.validation.connect import ConnectBlock
-
         chain = self.node.chainstate
         generated: List[str] = []
 
@@ -198,45 +172,28 @@ class MiningHandlers:
                 logger.warning("Failed to mine block")
                 break
 
-            if hasattr(self.node, "on_block"):
-                accepted, block_hash, reason = await self.node.on_block(
-                    block, source_peer=None, relay=True
-                )
-                if not accepted:
-                    logger.warning("generate: invalid block: %s", reason)
-                    break
-                generated.append(block_hash)
-                logger.info("Generated block %s: %s", chain.get_best_height(), block_hash[:16])
-                continue
-
-            height = chain.get_best_height() + 1
-            if not chain.validate_block_stateful(block, height):
-                logger.warning("generate: invalid block at height %d", height)
-                break
-
-            block_work = chain.chainwork.calculate_chain_work([block.header])
-            chainwork_total = chain.get_best_chainwork() + block_work
-
-            chain.blocks_store.write_block(block, height)
-            chain.block_index.add_block(block, height, chainwork_total)
-
-            connect = ConnectBlock(
-                chain.utxo_store,
-                chain.block_index,
-                network=chain.params.get_network_name(),
+            if not hasattr(self.node, "on_block"):
+                raise RPCError(-32000, "Node block accept path unavailable")
+            accepted, block_hash, reason = await self.node.on_block(
+                block, source_peer=None, relay=True
             )
-            if not connect.connect(block):
-                logger.warning("Failed to connect block")
+            if not accepted:
+                logger.warning("generate: invalid block: %s", reason)
                 break
-
-            block_hash = block.header.hash_hex()
-            chain.set_best_block(block_hash, height, chainwork_total)
-            chain.header_chain.add_header(block.header, height, chainwork_total)
-
             generated.append(block_hash)
-            logger.info(f"Generated block {height}: {block_hash[:16]}")
+            logger.info("Generated block %s: %s", chain.get_best_height(), block_hash[:16])
 
         return generated
+
+    async def generate_to_address(
+        self,
+        num_blocks: int,
+        address: str,
+        maxtries: int = 1000000,
+    ) -> List[str]:
+        if not isinstance(address, str) or not address.strip():
+            raise ValueError("address is required")
+        return await self.generate(num_blocks=int(num_blocks), address=address.strip(), maxtries=maxtries)
 
     def _get_difficulty(self, bits: int) -> float:
         pow_check = ProofOfWork(self.node.chainstate.params)

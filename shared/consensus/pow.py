@@ -1,6 +1,5 @@
 """Proof of Work validation and difficulty adjustment."""
 
-import math
 from typing import List
 from .params import ConsensusParams
 from ..core.block import BlockHeader
@@ -13,24 +12,73 @@ class ProofOfWork:
 
     def validate(self, header: BlockHeader) -> bool:
         target = self.get_target(header.bits)
+        if target <= 0:
+            return False
         return header.is_valid_pow(target)
 
-    def get_target(self, bits: int) -> int:
+    def decode_compact(
+        self,
+        bits: int,
+        require_canonical: bool = False,
+    ) -> tuple[int, bool, str]:
+        """Decode compact difficulty bits.
+
+        Returns (target, ok, reason). `target` is 0 when invalid.
+        """
         exponent = bits >> 24
         coefficient = bits & 0x007fffff
+        negative = (bits & 0x00800000) != 0
+
+        if coefficient == 0:
+            return 0, False, "zero_target"
+        if negative:
+            return 0, False, "negative_compact"
+
         if exponent <= 3:
             target = coefficient >> (8 * (3 - exponent))
         else:
             target = coefficient << (8 * (exponent - 3))
-        if target < 0 or target > self.params.pow_limit:
-            target = self.params.pow_limit
+
+        # Bitcoin-style overflow detection for compact representation.
+        overflow = coefficient != 0 and (
+            exponent > 34
+            or (coefficient > 0xFF and exponent > 33)
+            or (coefficient > 0xFFFF and exponent > 32)
+        )
+        if overflow:
+            return 0, False, "overflow_compact"
+
+        if target <= 0:
+            return 0, False, "zero_target"
+        if target > self.params.pow_limit:
+            return 0, False, "target_above_pow_limit"
+
+        if require_canonical and self.get_bits(target) != int(bits):
+            return 0, False, "non_canonical_compact"
+        return int(target), True, ""
+
+    def validate_compact(self, bits: int, require_canonical: bool = False) -> bool:
+        _, ok, _ = self.decode_compact(bits, require_canonical=require_canonical)
+        return ok
+
+    def get_target(self, bits: int) -> int:
+        target, ok, _ = self.decode_compact(bits, require_canonical=False)
+        if not ok:
+            return 0
         return target
 
     def get_bits(self, target: int) -> int:
+        if target <= 0:
+            return 0
+        if target > self.params.pow_limit:
+            target = self.params.pow_limit
         target_bytes = target.to_bytes(32, 'big')
+        i = 0
         for i, byte in enumerate(target_bytes):
             if byte != 0:
                 break
+        else:
+            return 0
         exponent = 32 - i
         coefficient = int.from_bytes(target_bytes[i:i+3], 'big')
         if coefficient >= 0x800000:
@@ -40,6 +88,8 @@ class ProofOfWork:
 
     def calculate_difficulty(self, bits: int) -> float:
         target = self.get_target(bits)
+        if target <= 0:
+            return 0.0
         max_target = self.params.pow_limit
         return max_target / target
 

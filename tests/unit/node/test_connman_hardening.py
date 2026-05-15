@@ -9,6 +9,9 @@ from unittest import mock
 from node.p2p.addrman import AddrMan
 from node.p2p.connman import ConnectionManager
 from node.p2p.limits import OutboundClass
+from shared.crypto.keys import PrivateKey
+from shared.crypto.signatures import sign_message_hash
+from shared.protocol.messages import JoinAttestMessage
 
 
 class _Cfg:
@@ -20,6 +23,7 @@ class _Cfg:
         bootstrap=None,
         bind: str = "0.0.0.0",
         port: int = 8333,
+        admission_mode: str = "open",
     ):
         self._hardening = bool(hardening)
         self._connect = list(connect or [])
@@ -27,6 +31,7 @@ class _Cfg:
         self._bootstrap = list(bootstrap or [])
         self._bind = str(bind)
         self._port = int(port)
+        self._admission_mode = str(admission_mode)
 
     def get(self, key, default=None):
         if key == "network_hardening":
@@ -48,6 +53,12 @@ class _Cfg:
     def get_bootstrap_nodes(self):
         return list(self._bootstrap)
 
+    def get_admission_mode(self):
+        return self._admission_mode
+
+    def get_min_verifier_votes(self):
+        return 1
+
 
 class _FakePeer:
     def __init__(self, address: str, connected_at: float):
@@ -59,8 +70,35 @@ class _FakePeer:
         self.connected = True
         self.disconnected = False
 
-    async def disconnect(self) -> None:
+    async def disconnect(self, reason: str = "") -> None:
+        self.disconnect_reason = reason or getattr(self, "disconnect_reason", "")
         self.connected = False
+        self.disconnected = True
+
+
+class _AttestPeer:
+    def __init__(self, address: str):
+        self.address = address
+        self.connected = True
+        self.results = []
+        self.disconnected = False
+
+    async def send_join_result(self, msg) -> None:
+        self.results.append(msg)
+
+    async def disconnect(self, reason: str = "") -> None:
+        _ = reason
+        self.disconnected = True
+        self.connected = False
+
+
+class _ViolationPeer:
+    def __init__(self, address: str):
+        self.address = address
+        self.disconnected = False
+
+    async def disconnect(self, reason: str = "") -> None:
+        _ = reason
         self.disconnected = True
 
 
@@ -222,6 +260,209 @@ class TestConnmanHardening(unittest.TestCase):
                 self.assertEqual(args[1], "127.0.0.1")
                 self.assertEqual(args[2], 18444)
                 await cm.stop()
+
+        asyncio.run(run())
+
+    def test_strict_mode_outbound_connect_does_not_auto_verify_local(self) -> None:
+        async def run() -> None:
+            cfg = _Cfg(False, admission_mode="strict")
+            cm = ConnectionManager(AddrMan(), node_config=cfg)
+
+            class _OutboundPeer:
+                def __init__(self, host: str, port: int, is_outbound: bool = True):
+                    self.host = host
+                    self.port = int(port)
+                    self.is_outbound = bool(is_outbound)
+                    self.connected = True
+                    self.on_message = None
+                    self.on_disconnect = None
+                    self.connected_at = 0.0
+
+                @property
+                def address(self) -> str:
+                    return f"{self.host}:{self.port}"
+
+                async def connect(self) -> bool:
+                    return True
+
+            with mock.patch("node.p2p.connman.Peer", _OutboundPeer):
+                with mock.patch.object(cm.authority_chain, "verify_from_local", wraps=cm.authority_chain.verify_from_local) as verify_local:
+                    ok = await cm._connect_outbound_address("198.51.100.10:8333", OutboundClass.FULL_RELAY)
+                    self.assertTrue(ok)
+                    verify_local.assert_not_called()
+
+        asyncio.run(run())
+
+    def test_protocol_violation_threshold_disconnects_peer(self) -> None:
+        async def run() -> None:
+            cm = ConnectionManager(AddrMan())
+            peer = _ViolationPeer("198.51.100.50:8333")
+            await cm._on_peer_protocol_violation(peer, "invalid_command")
+            self.assertFalse(peer.disconnected)
+            await cm._on_peer_protocol_violation(peer, "malformed_message")
+            self.assertFalse(peer.disconnected)
+            await cm._on_peer_protocol_violation(peer, "oversized_payload")
+            self.assertTrue(peer.disconnected)
+
+        asyncio.run(run())
+
+    def test_disconnect_reason_is_tracked(self) -> None:
+        async def run() -> None:
+            cm = ConnectionManager(AddrMan())
+            peer = _FakePeer("198.51.100.80:8333", connected_at=1.0)
+            peer.disconnect_reason = "idle_timeout"
+            cm.peers[peer.address] = peer
+            await cm._on_peer_disconnect(peer)
+            self.assertEqual(cm._disconnect_reasons.get("idle_timeout"), 1)
+
+        asyncio.run(run())
+
+    def test_idle_timeout_disconnects_stale_peer(self) -> None:
+        async def run() -> None:
+            cm = ConnectionManager(AddrMan())
+            cm._idle_timeout_secs = 1
+            peer = _FakePeer("198.51.100.81:8333", connected_at=1.0)
+            peer.last_message_at = asyncio.get_event_loop().time() - 5
+            cm.peers[peer.address] = peer
+            await cm._drop_idle_peers()
+            self.assertTrue(peer.disconnected)
+
+        asyncio.run(run())
+
+    def test_dead_peer_cleanup_removes_all_indexes(self) -> None:
+        async def run() -> None:
+            cm = ConnectionManager(AddrMan())
+            peer = _FakePeer("198.51.100.60:8333", connected_at=1.0)
+            cm.peers[peer.address] = peer
+            cm.outbound_peers[peer.address] = peer
+            cm.outbound_classes[peer.address] = OutboundClass.FULL_RELAY
+            cm._pending_outbound_class[peer.address] = OutboundClass.FULL_RELAY
+            cm._peer_violation_counts[peer.address] = 2
+            await cm._on_peer_disconnect(peer)
+            self.assertNotIn(peer.address, cm.peers)
+            self.assertNotIn(peer.address, cm.outbound_peers)
+            self.assertNotIn(peer.address, cm.outbound_classes)
+            self.assertNotIn(peer.address, cm._pending_outbound_class)
+            self.assertNotIn(peer.address, cm._peer_violation_counts)
+
+        asyncio.run(run())
+
+    def test_verifier_readiness_blocks_attestation_when_node_is_behind(self) -> None:
+        async def run() -> None:
+            cfg = _Cfg(False, admission_mode="strict")
+            cm = ConnectionManager(AddrMan(), node_config=cfg)
+            cm.authority_chain_enabled = True
+            cm.chainstate = type("_Chain", (), {"get_best_height": lambda self: 10})()
+            best_peer = type("_Peer", (), {"peer_height": 25})()
+            cm.get_best_height_peer = lambda: best_peer
+
+            peer = _AttestPeer("198.51.100.10:8333")
+            cm._admission_challenges[peer.address] = {
+                "challenge_id": 111,
+                "challenge": b"abc",
+                "expires_at": 1_700_000_060,
+                "created_at_ms": 1,
+                "candidate_node_id": "node:candidate",
+                "candidate_pubkey": "02" + ("11" * 32),
+            }
+            att = JoinAttestMessage(
+                candidate_node_id="node:candidate",
+                verifier_node_id="node:verifier",
+                verifier_pubkey="02" + ("11" * 32),
+                challenge_id=111,
+                signature=b"\x30\x06\x02\x01\x01\x02\x01\x01",
+                timestamp=1_700_000_000,
+            )
+            with mock.patch("time.time", return_value=1_700_000_000.0):
+                await cm.handle_join_attest(peer, att.serialize())
+            self.assertTrue(peer.results)
+            self.assertEqual(peer.results[-1].reason, "verifier_not_synced")
+
+        asyncio.run(run())
+
+    def test_attestation_replay_and_time_skew_are_rejected(self) -> None:
+        async def run() -> None:
+            cfg = _Cfg(False, admission_mode="strict")
+            cm = ConnectionManager(AddrMan(), node_config=cfg)
+            cm.authority_chain_enabled = True
+            cm.chainstate = type("_Chain", (), {"get_best_height": lambda self: 100})()
+            cm.get_best_height_peer = lambda: type("_Peer", (), {"peer_height": 100})()
+            cm.authority_chain.verify_from_local("198.51.100.1:8333")
+
+            peer = _AttestPeer("198.51.100.10:8333")
+            candidate_key = PrivateKey()
+            candidate_pub = candidate_key.public_key().to_bytes(compressed=True).hex()
+            candidate_node_id = "198.51.100.77:8333"
+
+            now = 1_700_000_000
+            cm._admission_challenges[peer.address] = {
+                "challenge_id": 42,
+                "challenge": b"challenge-x",
+                "expires_at": now + 60,
+                "created_at_ms": now * 1000,
+                "candidate_node_id": candidate_node_id,
+                "candidate_pubkey": candidate_pub,
+            }
+            msg_hash = cm._build_join_attestation_hash(
+                candidate_node_id=candidate_node_id,
+                candidate_pubkey_hex=candidate_pub,
+                challenge_id=42,
+                challenge=b"challenge-x",
+            )
+            sig = sign_message_hash(candidate_key, msg_hash)
+            good_att = JoinAttestMessage(
+                candidate_node_id=candidate_node_id,
+                verifier_node_id="198.51.100.1:8333",
+                verifier_pubkey=candidate_pub,
+                challenge_id=42,
+                signature=sig,
+                timestamp=now,
+            )
+            with mock.patch("time.time", return_value=float(now)):
+                await cm.handle_join_attest(peer, good_att.serialize())
+            self.assertTrue(peer.results)
+            self.assertEqual(peer.results[-1].reason, "accepted")
+
+            # Reuse same challenge/attestation => replay reject.
+            cm._admission_challenges[peer.address] = {
+                "challenge_id": 42,
+                "challenge": b"challenge-x",
+                "expires_at": now + 60,
+                "created_at_ms": now * 1000,
+                "candidate_node_id": candidate_node_id,
+                "candidate_pubkey": candidate_pub,
+            }
+            with mock.patch("time.time", return_value=float(now)):
+                await cm.handle_join_attest(peer, good_att.serialize())
+            self.assertEqual(peer.results[-1].reason, "attestation_replay")
+
+            # New challenge but stale timestamp => skew reject.
+            cm._admission_challenges[peer.address] = {
+                "challenge_id": 43,
+                "challenge": b"challenge-y",
+                "expires_at": now + 60,
+                "created_at_ms": now * 1000,
+                "candidate_node_id": candidate_node_id,
+                "candidate_pubkey": candidate_pub,
+            }
+            msg_hash2 = cm._build_join_attestation_hash(
+                candidate_node_id=candidate_node_id,
+                candidate_pubkey_hex=candidate_pub,
+                challenge_id=43,
+                challenge=b"challenge-y",
+            )
+            sig2 = sign_message_hash(candidate_key, msg_hash2)
+            skew_att = JoinAttestMessage(
+                candidate_node_id=candidate_node_id,
+                verifier_node_id="198.51.100.1:8333",
+                verifier_pubkey=candidate_pub,
+                challenge_id=43,
+                signature=sig2,
+                timestamp=now - 10_000,
+            )
+            with mock.patch("time.time", return_value=float(now)):
+                await cm.handle_join_attest(peer, skew_att.serialize())
+            self.assertEqual(peer.results[-1].reason, "attestation_time_skew")
 
         asyncio.run(run())
 

@@ -8,11 +8,14 @@ import subprocess
 import tempfile
 import time
 import unittest
+import pytest
 
 from node.wallet.core.tx_builder import TransactionBuilder
 from shared.core.transaction import Transaction, TxIn, TxOut
 from shared.crypto.address import public_key_to_address
 from shared.crypto.keys import PrivateKey
+
+pytestmark = [pytest.mark.allow_sleep, pytest.mark.slow]
 
 
 def _free_port() -> int:

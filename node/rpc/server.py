@@ -14,6 +14,7 @@ from aiohttp import web
 
 from shared.utils.logging import get_logger
 from .auth import AuthManager
+from .errors import RPCError, invalid_params
 
 if TYPE_CHECKING:
     from node.app.config import Config
@@ -219,6 +220,28 @@ class RPCServer:
 
             return {'jsonrpc': '2.0', 'result': result, 'id': req_id}
 
+        except TypeError as e:
+            logger.error(f"RPC method {method} invalid params: {e}")
+            return {
+                'jsonrpc': '2.0',
+                'error': {'code': -32602, 'message': 'Invalid params'},
+                'id': req_id
+            }
+        except RPCError as e:
+            logger.error(f"RPC method {method} failed: {e}")
+            return {
+                'jsonrpc': '2.0',
+                'error': {'code': int(e.code), 'message': str(e.message)},
+                'id': req_id
+            }
+        except ValueError as e:
+            err = invalid_params(str(e))
+            logger.error(f"RPC method {method} invalid params: {e}")
+            return {
+                'jsonrpc': '2.0',
+                'error': {'code': int(err.code), 'message': str(err.message)},
+                'id': req_id
+            }
         except Exception as e:
             logger.error(f"RPC method {method} failed: {e}")
             return {

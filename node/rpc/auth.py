@@ -49,7 +49,7 @@ class AuthManager:
             with open(self.cookie_file, "x", encoding="utf-8") as f:
                 f.write(f"berzcoin:{self.cookie}")
             os.chmod(self.cookie_file, 0o600)
-            logger.info("Secure RPC cookie created: %s", self.cookie_file)
+            logger.info("Secure RPC cookie created")
 
         except FileExistsError:
             try:
@@ -58,9 +58,9 @@ class AuthManager:
                 if ":" in content:
                     self.cookie = content.split(":", 1)[1]
                 else:
-                    logger.error("Invalid RPC cookie file format: %s", self.cookie_file)
+                    logger.error("Invalid RPC cookie file format")
                     raise RuntimeError("Invalid .cookie file") from None
-                logger.info("Loaded existing RPC cookie from %s", self.cookie_file)
+                logger.info("Loaded existing RPC cookie")
             except Exception as e:
                 logger.error("Failed to read existing RPC cookie: %s", e)
                 raise

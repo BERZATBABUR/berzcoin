@@ -44,6 +44,7 @@ class _Block:
 class _DBStub:
     def __init__(self, outputs):
         self.outputs = dict(outputs)
+        self.undo = {}
         self.commits = 0
         self.rollbacks = 0
 
@@ -57,7 +58,10 @@ class _DBStub:
             raise
 
     def fetch_one(self, query, params):
-        _ = query
+        q = " ".join(query.split()).lower()
+        if "from block_undo" in q:
+            block_hash, txid, in_idx = params
+            return self.undo.get((str(block_hash), str(txid), int(in_idx)))
         txid, index = params
         row = self.outputs.get((txid, int(index)))
         if row is None:
@@ -80,6 +84,10 @@ class _DBStub:
                 self.outputs[key]["spent"] = 0
                 self.outputs[key]["spent_by_txid"] = None
                 self.outputs[key]["spent_by_index"] = None
+        if q.startswith("delete from block_undo"):
+            block_hash = str(params[0])
+            for k in [k for k in self.undo if k[0] == block_hash]:
+                self.undo.pop(k, None)
 
 
 class _UTXOStoreStub:
@@ -185,6 +193,13 @@ class TestDisconnectBlock(unittest.TestCase):
         block = _Block(block_hash, prev_hash, [tx])
 
         disconnector = DisconnectBlock(utxo, idx)
+        db.undo[(block_hash, spending_txid, 0)] = {
+            "value": 5000,
+            "script_pubkey": b"\x51",
+            "address": None,
+            "height": 7,
+            "is_coinbase": 1,
+        }
         ok = disconnector.disconnect(block)
         self.assertTrue(ok)
 
@@ -196,6 +211,60 @@ class TestDisconnectBlock(unittest.TestCase):
         self.assertEqual(db.outputs[(prev_txid, 0)]["spent"], 0)
         self.assertIsNone(db.outputs[(prev_txid, 0)]["spent_by_txid"])
         self.assertEqual(idx.main_chain_marks.get(block_hash), False)
+
+    def test_disconnect_failure_rolls_back_partial_utxo_changes(self):
+        prev_txid = "ee" * 32
+        spending_txid = "ff" * 32
+        block_hash = "12" * 32
+        prev_hash = "34" * 32
+
+        db = _DBStub(
+            {
+                # Intentionally do not include (prev_txid, 0) so disconnect fails
+                # when trying to restore the spent parent output.
+                (spending_txid, 0): {
+                    "value": 4900,
+                    "script_pubkey": b"\x51",
+                    "height": 8,
+                    "is_coinbase": 0,
+                    "spent": 0,
+                    "spent_by_txid": None,
+                    "spent_by_index": None,
+                },
+            }
+        )
+        utxo = _UTXOStoreStub(db)
+        # Output created by the block being disconnected
+        utxo.utxos[(spending_txid, 0)] = {
+            "value": 4900,
+            "script_pubkey": b"\x51",
+            "height": 8,
+            "is_coinbase": False,
+        }
+        before = dict(utxo.utxos)
+
+        idx = _BlockIndexStub(
+            {
+                block_hash: _Entry(8, block_hash, prev_hash),
+                prev_hash: _Entry(7, prev_hash, "00" * 32),
+            }
+        )
+
+        tx = _Tx(
+            spending_txid,
+            vin=[_TxIn(prev_txid, 0)],
+            vout_count=1,
+            is_coinbase=False,
+        )
+        block = _Block(block_hash, prev_hash, [tx])
+
+        disconnector = DisconnectBlock(utxo, idx)
+        ok = disconnector.disconnect(block)
+        self.assertFalse(ok)
+        self.assertEqual(db.commits, 0)
+        self.assertEqual(db.rollbacks, 1)
+        self.assertEqual(utxo.utxos, before)
+        self.assertNotIn(block_hash, idx.main_chain_marks)
 
 
 if __name__ == "__main__":

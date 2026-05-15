@@ -1,0 +1,11 @@
+{
+  "verified_nodes": [],
+  "verifiers": [],
+  "verifier_ids": [],
+  "verified_by": {},
+  "attestations": {},
+  "node_identities": {},
+  "admission_mode": "strict",
+  "min_verifier_votes": 2,
+  "updated_at": 1778835690
+}
