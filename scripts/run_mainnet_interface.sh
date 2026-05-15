@@ -36,7 +36,13 @@ step_fail() {
 
 find_node_pids_for_datadir() {
   local target="$1"
-  ps -eo pid=,args= | awk -v dd="${target}" '
+  local ps_rows=""
+  if ps -eo pid=,args= >/dev/null 2>&1; then
+    ps_rows="$(ps -eo pid=,args=)"
+  else
+    ps_rows="$(ps -ef 2>/dev/null | awk 'NR>1 {pid=$2; $1=$2=$3=$4=$5=$6=$7=""; sub(/^ +/, "", $0); print pid " " $0}')"
+  fi
+  printf "%s\n" "${ps_rows}" | awk -v dd="${target}" '
     {
       pid=$1
       $1=""

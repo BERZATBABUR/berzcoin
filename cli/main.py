@@ -257,6 +257,7 @@ class BerzCoinCLI:
             cmd = ["bash"] + cmd
         env = os.environ.copy()
         env["BERZCOIN_V1_MINING_TARGET_SECS"] = "120"
+        env["BERZCOIN_PYTHON_BIN"] = sys.executable
         try:
             completed = subprocess.run(cmd, env=env, check=False)
         except FileNotFoundError as e:

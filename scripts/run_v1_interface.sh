@@ -11,6 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PYTHON_BIN="${BERZCOIN_PYTHON_BIN:-}"
 
 NETWORK="${BERZCOIN_V1_NETWORK:-regtest}"
 DATADIR="${BERZCOIN_V1_DATADIR:-}"
@@ -261,13 +262,24 @@ stop_nodes_for_datadir() {
 }
 
 select_commands() {
+  if [[ -z "${PYTHON_BIN}" ]]; then
+    if command -v python >/dev/null 2>&1; then
+      PYTHON_BIN="python"
+    elif command -v python3 >/dev/null 2>&1; then
+      PYTHON_BIN="python3"
+    else
+      echo "error: python interpreter not found on PATH" >&2
+      exit 1
+    fi
+  fi
+
   if command -v berzcoind >/dev/null 2>&1 && command -v berzcoin-cli >/dev/null 2>&1; then
     BERZCOIND=(berzcoind)
     BERZCOINCLI=(berzcoin-cli)
   else
     export PYTHONPATH="${REPO_ROOT}"
-    BERZCOIND=(python3 -m node.app.main)
-    BERZCOINCLI=(python3 -m cli.main)
+    BERZCOIND=("${PYTHON_BIN}" -m node.app.main)
+    BERZCOINCLI=("${PYTHON_BIN}" -m cli.main)
   fi
 }
 
@@ -350,10 +362,26 @@ network_flag_args() {
   esac
 }
 
+ensure_python_bin() {
+  if [[ -n "${PYTHON_BIN}" ]]; then
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+    return 0
+  fi
+  echo "error: python interpreter not found on PATH" >&2
+  exit 1
+}
+
 port_free() {
   local host="$1"
   local port="$2"
-  python3 - "$host" "$port" <<'PY'
+  "${PYTHON_BIN}" - "$host" "$port" <<'PY'
 import socket
 import sys
 
@@ -373,7 +401,7 @@ PY
 
 find_free_port() {
   local host="${1:-127.0.0.1}"
-  python3 - "$host" <<'PY'
+  "${PYTHON_BIN}" - "$host" <<'PY'
 import socket
 import sys
 
@@ -573,6 +601,7 @@ prime_and_start_mining() {
 main() {
   parse_args "$@"
   resolve_network_defaults
+  ensure_python_bin
 
   if [[ "${RESET_DATADIR}" != "0" && "${RESET_DATADIR}" != "1" ]]; then
     echo "error: BERZCOIN_V1_RESET_DATADIR must be 0 or 1" >&2
