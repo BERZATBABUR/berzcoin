@@ -242,13 +242,19 @@ class BerzCoinCLI:
             datadir,
             "--web-port",
             str(web_port),
+            "--rpc-port",
+            str(rpc_port),
+            "--p2p-port",
+            str(p2p_port),
+            "--p2p-bind",
+            str(p2p_bind),
         ]
         if starter_mode:
             cmd.append("--starter")
         if join_target:
             cmd.extend(["--join", join_target])
         if os.name == "nt":
-            cmd = ["bash", launcher, "--datadir", datadir, "--web-port", str(web_port)] + cmd[5:]
+            cmd = ["bash"] + cmd
         env = os.environ.copy()
         env["BERZCOIN_V1_MINING_TARGET_SECS"] = "120"
         try:
