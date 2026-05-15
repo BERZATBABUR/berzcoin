@@ -495,7 +495,7 @@ class ConnectionManager:
                 continue
             if now - last_message <= timeout:
                 continue
-            self.peer_scores.record_bad(peer.address, "stale_peer")
+            # Do not penalize/bump ban score for passive idle disconnects.
             await peer.disconnect(reason="idle_timeout")
 
     async def _connect_outbound(self, count: int) -> None:
@@ -1138,7 +1138,7 @@ class ConnectionManager:
             return
         try:
             await worst.disconnect()
-            self.peer_scores.record_bad(worst.address, "stale_peer")
+            # Do not penalize/ban on maintenance eviction decisions.
         except Exception:
             pass
 
@@ -1355,7 +1355,7 @@ class ConnectionManager:
         if candidate is None:
             return
         await candidate.disconnect()
-        self.peer_scores.record_bad(candidate.address, "stale_peer")
+        # Do not penalize/ban on periodic outbound rotation.
 
     def _select_rotation_candidate(self) -> Optional[Peer]:
         protected = self._protected_outbound_addresses()

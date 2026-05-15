@@ -44,6 +44,7 @@ class TestBootstrapDefaults(unittest.TestCase):
             cfg.set("addnode", [])
             cfg.set("bootstrap_enabled", False)
             cfg.set("allow_missing_bootstrap", True)
+            cfg.set("bind", "127.0.0.1")
 
             self.assertTrue(cfg.validate())
 

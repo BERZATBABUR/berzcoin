@@ -6,6 +6,8 @@ import argparse
 import asyncio
 import os
 import re
+import subprocess
+import configparser
 from typing import Any, Optional
 
 import aiohttp
@@ -40,6 +42,22 @@ class BerzCoinCLI:
 
         subparsers = parser.add_subparsers(dest='command', help='Command')
 
+        p = subparsers.add_parser(
+            "start-mainnet",
+            help="Start mainnet node + web interface together (starter mode)",
+        )
+        p.add_argument(
+            "--starter",
+            action="store_true",
+            help="Required safety flag for starter launch",
+        )
+        p.add_argument(
+            "--web-port",
+            type=int,
+            default=8080,
+            help="Requested web interface port (default: 8080)",
+        )
+
         BlockchainCommands.add_parser(subparsers)
         WalletCommands.add_parser(subparsers)
         MiningCommands.add_parser(subparsers)
@@ -53,6 +71,9 @@ class BerzCoinCLI:
 
         if not self._validate_common_args(parsed_args):
             return 2
+
+        if parsed_args.command == "start-mainnet":
+            return self._run_start_mainnet(parsed_args)
 
         if parsed_args.rpcuser:
             self.rpc_user = parsed_args.rpcuser
@@ -123,6 +144,95 @@ class BerzCoinCLI:
             print(f"Error: malformed {label}", file=sys.stderr)
             return False
         return True
+
+    @staticmethod
+    def _read_mainnet_config(conf_path: str) -> dict[str, str]:
+        parser = configparser.ConfigParser()
+        parser.read(conf_path, encoding="utf-8")
+        if not parser.has_section("main"):
+            return {}
+        return {k: str(v).strip() for k, v in parser.items("main")}
+
+    @staticmethod
+    def _looks_placeholder_passphrase(value: str) -> bool:
+        text = str(value or "").strip().lower()
+        if not text:
+            return True
+        markers = (
+            "replace",
+            "your_real",
+            "strong_pass",
+            "changeme",
+            "example",
+            "password",
+        )
+        return any(m in text for m in markers)
+
+    def _run_start_mainnet(self, args: argparse.Namespace) -> int:
+        if not bool(getattr(args, "starter", False)):
+            print("Error: start-mainnet requires --starter", file=sys.stderr)
+            return 2
+
+        datadir = os.path.expanduser(
+            str(getattr(args, "datadir", "") or "~/.berzcoin_mainnet")
+        )
+        conf_path = os.path.expanduser(
+            str(getattr(args, "conf", "") or os.path.join(datadir, "berzcoin.conf"))
+        )
+        if not os.path.isfile(conf_path):
+            print(f"Error: config file not found: {conf_path}", file=sys.stderr)
+            return 2
+
+        settings = self._read_mainnet_config(conf_path)
+        network = settings.get("network", "").strip().lower()
+        if network and network != "mainnet":
+            print(f"Error: config network must be mainnet (got: {network})", file=sys.stderr)
+            return 2
+
+        passphrase = settings.get("wallet_encryption_passphrase", "")
+        env_passphrase = os.environ.get("BERZCOIN_WALLET_PASSPHRASE", "")
+        chosen_passphrase = passphrase or env_passphrase
+        if self._looks_placeholder_passphrase(chosen_passphrase):
+            print(
+                "Error: wallet_encryption_passphrase is missing or placeholder-like in mainnet config.",
+                file=sys.stderr,
+            )
+            print(
+                "Set a real passphrase in berzcoin.conf or BERZCOIN_WALLET_PASSPHRASE.",
+                file=sys.stderr,
+            )
+            return 2
+
+        p2p_bind = settings.get("bind", "0.0.0.0") or "0.0.0.0"
+        p2p_port = int(settings.get("port", "8333") or "8333")
+        rpc_bind = settings.get("rpcbind", "127.0.0.1") or "127.0.0.1"
+        rpc_port = int(settings.get("rpcport", "8332") or "8332")
+        web_port = int(getattr(args, "web_port", 8080) or 8080)
+
+        print("Starting BerzCoin mainnet starter mode")
+        print(f"  config:  {conf_path}")
+        print(f"  datadir: {datadir}")
+        print(f"  p2p:     {p2p_bind}:{p2p_port}")
+        print(f"  rpc:     {rpc_bind}:{rpc_port}")
+        print(f"  web:     127.0.0.1:{web_port}")
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        launcher = os.path.join(repo_root, "scripts", "run_mainnet_interface.sh")
+        if not os.path.isfile(launcher):
+            print(f"Error: launcher not found: {launcher}", file=sys.stderr)
+            return 2
+
+        cmd = [
+            launcher,
+            "--datadir",
+            datadir,
+            "--web-port",
+            str(web_port),
+        ]
+        env = os.environ.copy()
+        env["BERZCOIN_V1_MINING_TARGET_SECS"] = "120"
+        completed = subprocess.run(cmd, env=env, check=False)
+        return int(completed.returncode)
 
     async def _execute_command(self, args: argparse.Namespace) -> Any:
         handler = CommandHandler(self.rpc_url, self.rpc_user, self.rpc_password)
@@ -237,6 +347,8 @@ class BerzCoinCLI:
             return await handler.control.add_peer(args.address, 'addnode')
         if args.command == 'quickjoin':
             return await handler.control.quick_join(args.address)
+        if args.command == 'join-starter':
+            return await handler.control.join_starter(args.address)
         if args.command == 'listpeers':
             return await handler.control.list_peers(getattr(args, 'verbose', False))
         if args.command == 'clearbanned':
@@ -260,6 +372,8 @@ class BerzCoinCLI:
                 getattr(args, 'port', 8333),
                 getattr(args, 'max_peers', 8),
             )
+        if args.command == 'doctor-network':
+            return await handler.control.doctor_network(args.peer)
 
         return None
 
