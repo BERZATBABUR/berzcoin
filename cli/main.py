@@ -239,6 +239,8 @@ class BerzCoinCLI:
             return await handler.control.quick_join(args.address)
         if args.command == 'listpeers':
             return await handler.control.list_peers(getattr(args, 'verbose', False))
+        if args.command == 'clearbanned':
+            return await handler.control.clear_banned()
         if args.command == 'verifypeer':
             return await handler.control.verify_peer(
                 args.target,

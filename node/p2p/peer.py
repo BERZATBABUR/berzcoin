@@ -51,6 +51,7 @@ class Peer:
         self.partial_message_timeout_secs: int = 10
         self.min_read_progress_bytes: int = 1
         self.disconnect_reason: str = ""
+        self.last_handshake_error: str = ""
 
     def configure_handshake(
         self,
@@ -124,15 +125,26 @@ class Peer:
             return False
 
     async def _handshake(self) -> bool:
+        self.last_handshake_error = ""
         version_msg = self.handshake.create_version()
         await self.send_message("version", version_msg.serialize())
         version_response = await self._wait_for_message("version", timeout=self.handshake_timeout_secs)
         if version_response is None:
-            logger.error(f"Timeout waiting for version from {self.host}")
+            if not self.last_handshake_error:
+                self.last_handshake_error = "version_timeout"
+            self.disconnect_reason = self.disconnect_reason or self.last_handshake_error
+            logger.error(
+                "Handshake failed with %s:%s waiting for version (%s)",
+                self.host,
+                self.port,
+                self.last_handshake_error,
+            )
             return False
         remote_version, _ = VersionMessage.deserialize(version_response)
         valid, error = self.handshake.process_version(remote_version)
         if not valid:
+            self.last_handshake_error = f"invalid_version:{error}"
+            self.disconnect_reason = self.disconnect_reason or self.last_handshake_error
             logger.error(f"Invalid version from {self.host}: {error}")
             return False
         self.relay_txs = bool(getattr(remote_version, "relay", True))
@@ -140,7 +152,15 @@ class Peer:
         await self.send_message("verack", verack_msg.serialize())
         verack_response = await self._wait_for_message("verack", timeout=self.handshake_timeout_secs)
         if verack_response is None:
-            logger.error(f"Timeout waiting for verack from {self.host}")
+            if not self.last_handshake_error:
+                self.last_handshake_error = "verack_timeout"
+            self.disconnect_reason = self.disconnect_reason or self.last_handshake_error
+            logger.error(
+                "Handshake failed with %s:%s waiting for verack (%s)",
+                self.host,
+                self.port,
+                self.last_handshake_error,
+            )
             return False
         self.handshake.process_verack()
         self.version = PeerVersion(remote_version)
@@ -167,10 +187,24 @@ class Peer:
                     return None
                 try:
                     cmd, decoded_payload, _ = self.codec.decode(header_data + payload)
-                except Exception:
+                except Exception as e:
+                    self.last_handshake_error = f"malformed_message:{e}"
+                    logger.warning(
+                        "Malformed handshake message from %s:%s: %s",
+                        self.host,
+                        self.port,
+                        e,
+                    )
                     await self._report_protocol_violation("malformed_message")
                     return None
                 if cmd not in self.VALID_COMMANDS:
+                    self.last_handshake_error = f"invalid_command:{cmd}"
+                    logger.warning(
+                        "Invalid handshake command from %s:%s: %s",
+                        self.host,
+                        self.port,
+                        cmd,
+                    )
                     await self._report_protocol_violation("invalid_command")
                     return None
                 if cmd == command:

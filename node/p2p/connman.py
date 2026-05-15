@@ -576,7 +576,17 @@ class ConnectionManager:
             logger.info("Connected to %s (%s)", peer.address, outbound_class)
             return True
         self._pending_outbound_class.pop(peer.address, None)
-        self.peer_scores.record_bad(addr, "connect_failed")
+        disconnect_reason = str(getattr(peer, "disconnect_reason", "") or "")
+        if disconnect_reason.startswith("invalid_version:"):
+            self.peer_scores.record_bad(addr, "protocol_violation")
+        elif disconnect_reason.startswith("malformed_message:") or disconnect_reason.startswith("invalid_command:"):
+            # Handshake decoding issues are likely version/protocol skew; avoid immediate long bans.
+            self.peer_scores.record_bad(addr, "handshake_failed")
+        elif disconnect_reason in {"version_timeout", "verack_timeout"}:
+            # Network/transient failure: mild penalty only.
+            self.peer_scores.record_bad(addr, "connect_failed")
+        else:
+            self.peer_scores.record_bad(addr, "connect_failed")
         self.addrman.mark_failed(addr)
         return False
 
@@ -738,7 +748,15 @@ class ConnectionManager:
         peer.on_disconnect = self._on_peer_disconnect
         peer.on_protocol_violation = self._on_peer_protocol_violation
         if not await peer._handshake():
-            self.peer_scores.record_bad(peer.address, "handshake_failed")
+            disconnect_reason = str(getattr(peer, "disconnect_reason", "") or "")
+            if disconnect_reason.startswith("invalid_version:"):
+                self.peer_scores.record_bad(peer.address, "protocol_violation")
+            elif disconnect_reason.startswith("malformed_message:") or disconnect_reason.startswith("invalid_command:"):
+                self.peer_scores.record_bad(peer.address, "handshake_failed")
+            elif disconnect_reason in {"version_timeout", "verack_timeout"}:
+                self.peer_scores.record_bad(peer.address, "connect_failed")
+            else:
+                self.peer_scores.record_bad(peer.address, "handshake_failed")
             await peer.disconnect()
             return
         peer.connected = True

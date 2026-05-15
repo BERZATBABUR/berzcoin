@@ -48,6 +48,9 @@ class ControlCommands:
         p.add_argument('--verbose', action='store_true', help='Include detailed peer rows')
         p.set_defaults(command='listpeers')
 
+        p = subparsers.add_parser('clearbanned', help='Clear all P2P bans')
+        p.set_defaults(command='clearbanned')
+
         p = subparsers.add_parser('verifypeer', help='Add authority-chain attestation for a candidate peer')
         p.add_argument('target', help='Candidate peer host:port or node id')
         p.add_argument('--verifier-id', default='', help='Verifier identity (for example pubkey:...)')
@@ -98,6 +101,9 @@ class ControlCommands:
             "join_attempt": connect_result,
             "peer_state": peers_result,
         }
+
+    async def clear_banned(self):
+        return await self.handler.call('clearbanned')
 
     async def verify_peer(self, target: str, verifier_identity: str = "", verifier_node: str = "local"):
         return await self.handler.call('verify_peer', target, verifier_identity, verifier_node)
