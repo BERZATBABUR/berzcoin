@@ -420,8 +420,33 @@ normalize_ports() {
 
 write_conf() {
   local addnode_line=""
+  local mainnet_bind_guard=""
+  local wallet_passphrase_line=""
+  local existing_passphrase=""
   if [[ -n "${ADDNODE}" ]]; then
     addnode_line="addnode = ${ADDNODE}"
+  fi
+  if [[ "${NETWORK}" == "mainnet" && "${P2P_BIND}" != "127.0.0.1" && "${P2P_BIND}" != "::1" && "${P2P_BIND}" != "localhost" ]]; then
+    mainnet_bind_guard="mainnet_allow_unsafe_bind = true"
+  fi
+  if [[ -z "${BERZCOIN_WALLET_PASSPHRASE:-}" && -f "${CONF}" ]]; then
+    existing_passphrase="$(awk -F= '
+      BEGIN { in_main=0 }
+      /^\[main\]/ { in_main=1; next }
+      /^\[/ { in_main=0 }
+      in_main && $1 ~ /^[[:space:]]*wallet_encryption_passphrase[[:space:]]*$/ {
+        v=$2
+        sub(/^[[:space:]]+/, "", v)
+        sub(/[[:space:]]+$/, "", v)
+        print v
+        exit
+      }
+    ' "${CONF}")"
+  fi
+  if [[ -n "${BERZCOIN_WALLET_PASSPHRASE:-}" ]]; then
+    wallet_passphrase_line="wallet_encryption_passphrase = ${BERZCOIN_WALLET_PASSPHRASE}"
+  elif [[ -n "${existing_passphrase}" ]]; then
+    wallet_passphrase_line="wallet_encryption_passphrase = ${existing_passphrase}"
   fi
   cat > "${CONF}" <<EOF
 [main]
@@ -441,6 +466,8 @@ rpcallowip = 127.0.0.1
 bind = ${P2P_BIND}
 port = ${P2P_PORT}
 ${addnode_line}
+${mainnet_bind_guard}
+${wallet_passphrase_line}
 
 mining = false
 autominer = false

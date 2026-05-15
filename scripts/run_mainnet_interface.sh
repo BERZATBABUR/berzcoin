@@ -11,7 +11,7 @@ BASE_LAUNCHER="${SCRIPT_DIR}/run_v1_interface.sh"
 DATADIR="${BERZCOIN_MAINNET_DATADIR:-${HOME}/.berzcoin_v1_mainnet}"
 BOOTSTRAP_FILE="${BERZCOIN_MAINNET_BOOTSTRAP_FILE:-}"
 COPY_DEFAULT_BOOTSTRAP=1
-STEP_TOTAL=6
+STEP_TOTAL=7
 STEP_NO=0
 
 step_begin() {
@@ -280,6 +280,7 @@ main() {
     --network mainnet \
     --datadir "${DATADIR}" \
     --no-reset-datadir \
+    --block-time-secs 120 \
     "${FORWARD_ARGS[@]}"
 }
 
