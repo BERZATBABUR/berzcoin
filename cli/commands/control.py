@@ -40,6 +40,10 @@ class ControlCommands:
         p.add_argument('address', help='Peer address in host:port')
         p.set_defaults(command='addnode')
 
+        p = subparsers.add_parser('quickjoin', help='One-step join to starter node (connect + status)')
+        p.add_argument('address', help='Starter node address in host:port')
+        p.set_defaults(command='quickjoin')
+
         p = subparsers.add_parser('listpeers', help='List connected/static peers')
         p.add_argument('--verbose', action='store_true', help='Include detailed peer rows')
         p.set_defaults(command='listpeers')
@@ -86,6 +90,14 @@ class ControlCommands:
 
     async def list_peers(self, verbose: bool = False):
         return await self.handler.call('list_peers', bool(verbose))
+
+    async def quick_join(self, address: str):
+        connect_result = await self.handler.call('add_peer', address, 'connect')
+        peers_result = await self.handler.call('list_peers', True)
+        return {
+            "join_attempt": connect_result,
+            "peer_state": peers_result,
+        }
 
     async def verify_peer(self, target: str, verifier_identity: str = "", verifier_node: str = "local"):
         return await self.handler.call('verify_peer', target, verifier_identity, verifier_node)

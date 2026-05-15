@@ -235,6 +235,8 @@ class BerzCoinCLI:
             return await handler.control.add_peer(args.address, args.mode)
         if args.command == 'addnode':
             return await handler.control.add_peer(args.address, 'addnode')
+        if args.command == 'quickjoin':
+            return await handler.control.quick_join(args.address)
         if args.command == 'listpeers':
             return await handler.control.list_peers(getattr(args, 'verbose', False))
         if args.command == 'verifypeer':
