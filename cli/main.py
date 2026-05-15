@@ -219,7 +219,7 @@ class BerzCoinCLI:
         rpc_port = int(settings.get("rpcport", "8332") or "8332")
         web_port = int(getattr(args, "web_port", 8080) or 8080)
 
-        print("Starting BerzCoin mainnet starter mode")
+        print("Starting BerzCoin mainnet launcher")
         print(f"  config:  {conf_path}")
         print(f"  datadir: {datadir}")
         print(f"  p2p:     {p2p_bind}:{p2p_port}")
@@ -247,9 +247,21 @@ class BerzCoinCLI:
             cmd.append("--starter")
         if join_target:
             cmd.extend(["--join", join_target])
+        if os.name == "nt":
+            cmd = ["bash", launcher, "--datadir", datadir, "--web-port", str(web_port)] + cmd[5:]
         env = os.environ.copy()
         env["BERZCOIN_V1_MINING_TARGET_SECS"] = "120"
-        completed = subprocess.run(cmd, env=env, check=False)
+        try:
+            completed = subprocess.run(cmd, env=env, check=False)
+        except FileNotFoundError as e:
+            if os.name == "nt":
+                print(
+                    "Error: could not launch shell script on Windows. "
+                    "Install Git Bash and ensure `bash` is on PATH.",
+                    file=sys.stderr,
+                )
+                return 2
+            raise e
         return int(completed.returncode)
 
     async def _execute_command(self, args: argparse.Namespace) -> Any:
