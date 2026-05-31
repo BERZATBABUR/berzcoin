@@ -1,4 +1,7 @@
-# BerzCoin production operations (reference)
+# BerzCoin Production Operations (Reference)
+
+This is a production checklist companion.
+For incident and lifecycle procedures, prefer the runbooks linked in `docs/README.md`.
 
 This is an **operator checklist** for running `berzcoind` on a server. Adjust paths, users, and firewall rules for your environment.
 

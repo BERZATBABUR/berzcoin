@@ -1,4 +1,7 @@
-# BerzCoin Project Architecture
+# BerzCoin Project Architecture (Reference Map)
+
+This document is a component-to-file map.
+For architecture decisions, data flow, and scope, use `docs/architecture.md` as the canonical document.
 
 This document maps major blockchain components to their implementation files.
 
@@ -157,4 +160,3 @@ This document maps major blockchain components to their implementation files.
 - Explorer-oriented indexing backend:
   - `node/indexer/txindex.py`
   - `node/indexer/addressindex.py`
-

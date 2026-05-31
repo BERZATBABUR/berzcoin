@@ -1,5 +1,8 @@
 # BerzCoin Operations Playbook
 
+This is a quick operations reference.
+For canonical deploy/upgrade/incident procedures, follow the runbooks listed in `docs/README.md`.
+
 ## Health and Readiness
 - RPC liveness: `GET /health`
 - RPC readiness: `GET /ready`

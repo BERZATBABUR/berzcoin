@@ -220,8 +220,9 @@ berzcoind --regtest -conf ~/.berzcoin/berzcoin.conf
 Then open **http://127.0.0.1:8080/**.
 
 More detail: [docs/QUICK_START.md](docs/QUICK_START.md).
+Canonical docs index: [docs/README.md](docs/README.md).
 
-Release-readiness checklist + fresh-environment run guide:
+Legacy release-readiness checklist + fresh-environment run guide:
 [docs/V1_SHARING_AND_RUN.md](docs/V1_SHARING_AND_RUN.md).
 
 ## Ops and production readiness
