@@ -20,6 +20,9 @@ REGISTRY_URL="http://127.0.0.1:8787"
 SELF_IP=""
 USE_SEEDS=0
 PASSPHRASE="${BERZCOIN_WALLET_PASSPHRASE:-local-mainnet-demo-passphrase-2026}"
+ENABLE_WEB=0
+WEB_PORT="38080"
+WEB_HOST="127.0.0.1"
 
 usage() {
   cat <<EOF
@@ -35,6 +38,9 @@ Options:
   --registry URL          Seed registry URL (default: ${REGISTRY_URL})
   --self-ip IP            Reachable IP to register (default: auto-detect)
   --passphrase TEXT       Mainnet wallet encryption passphrase
+  --web                   Enable dashboard interface
+  --web-port PORT         Dashboard port when --web is used (default: ${WEB_PORT})
+  --web-host HOST         Dashboard bind host (default: ${WEB_HOST})
   --use-seeds             Also use built-in seed fallback
   -h, --help              Show help
 
@@ -42,6 +48,7 @@ Linux example:
   scripts/start_discovery_node_quick.sh \\
     --p2p-port 38333 \\
     --rpc-port 39333 \\
+    --web --web-port 38080 \\
     --registry http://10.159.189.97:8787 \\
     --self-ip 10.159.189.97
 
@@ -49,6 +56,7 @@ Windows Git Bash example:
   scripts/start_discovery_node_quick.sh \\
     --p2p-port 38334 \\
     --rpc-port 39334 \\
+    --web --web-port 38081 \\
     --registry http://10.159.189.97:8787 \\
     --self-ip 10.159.189.7
 EOF
@@ -70,6 +78,12 @@ while [[ $# -gt 0 ]]; do
       SELF_IP="${2:-}"; shift 2 ;;
     --passphrase)
       PASSPHRASE="${2:-}"; shift 2 ;;
+    --web)
+      ENABLE_WEB=1; shift ;;
+    --web-port)
+      WEB_PORT="${2:-}"; shift 2 ;;
+    --web-host)
+      WEB_HOST="${2:-}"; shift 2 ;;
     --use-seeds)
       USE_SEEDS=1; shift ;;
     -h|--help)
@@ -174,6 +188,9 @@ echo "    p2p:      0.0.0.0:${P2P_PORT}"
 echo "    rpc:      127.0.0.1:${RPC_PORT}"
 echo "    registry: ${REGISTRY_URL}"
 echo "    self-ip:  ${SELF_IP}"
+if [[ "${ENABLE_WEB}" == "1" ]]; then
+  echo "    web:      http://${WEB_HOST}:${WEB_PORT}/"
+fi
 echo
 
 cd "${REPO_ROOT}"
@@ -193,6 +210,11 @@ fi
 if [[ "${NETWORK}" == "mainnet" ]]; then
   export BERZCOIN_MAINNET_ALLOW_UNSAFE_BIND=true
   export BERZCOIN_WALLET_PASSPHRASE="${PASSPHRASE}"
+fi
+if [[ "${ENABLE_WEB}" == "1" ]]; then
+  export BERZCOIN_WEBDASHBOARD=true
+  export BERZCOIN_WEBHOST="${WEB_HOST}"
+  export BERZCOIN_WEBPORT="${WEB_PORT}"
 fi
 
 exec "${CMD[@]}"
