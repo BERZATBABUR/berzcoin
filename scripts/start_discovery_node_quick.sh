@@ -23,6 +23,7 @@ PASSPHRASE="${BERZCOIN_WALLET_PASSPHRASE:-local-mainnet-demo-passphrase-2026}"
 ENABLE_WEB=0
 WEB_PORT="38080"
 WEB_HOST="127.0.0.1"
+COINBASE_MATURITY=""
 
 usage() {
   cat <<EOF
@@ -41,6 +42,7 @@ Options:
   --web                   Enable dashboard interface
   --web-port PORT         Dashboard port when --web is used (default: ${WEB_PORT})
   --web-host HOST         Dashboard bind host (default: ${WEB_HOST})
+  --coinbase-maturity N   Coinbase confirmations before mining rewards are spendable
   --use-seeds             Also use built-in seed fallback
   -h, --help              Show help
 
@@ -84,6 +86,8 @@ while [[ $# -gt 0 ]]; do
       WEB_PORT="${2:-}"; shift 2 ;;
     --web-host)
       WEB_HOST="${2:-}"; shift 2 ;;
+    --coinbase-maturity)
+      COINBASE_MATURITY="${2:-}"; shift 2 ;;
     --use-seeds)
       USE_SEEDS=1; shift ;;
     -h|--help)
@@ -191,6 +195,9 @@ echo "    self-ip:  ${SELF_IP}"
 if [[ "${ENABLE_WEB}" == "1" ]]; then
   echo "    web:      http://${WEB_HOST}:${WEB_PORT}/"
 fi
+if [[ -n "${COINBASE_MATURITY}" ]]; then
+  echo "    maturity: ${COINBASE_MATURITY} confirmations"
+fi
 echo
 
 cd "${REPO_ROOT}"
@@ -215,6 +222,9 @@ if [[ "${ENABLE_WEB}" == "1" ]]; then
   export BERZCOIN_WEBDASHBOARD=true
   export BERZCOIN_WEBHOST="${WEB_HOST}"
   export BERZCOIN_WEBPORT="${WEB_PORT}"
+fi
+if [[ -n "${COINBASE_MATURITY}" ]]; then
+  export BERZCOIN_COINBASE_MATURITY="${COINBASE_MATURITY}"
 fi
 
 exec "${CMD[@]}"
